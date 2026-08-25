@@ -1,6 +1,6 @@
 # Development / runtime container for the conan utilities.
-# Pinned to Conan 1.66 (the version we target) on Python 3.11 — Conan 1.x
-# still imports the `imp` module, which was removed in Python 3.12.
+# Pinned to Conan 1.66 (the version we target). Python 3.11 is the newest
+# version Conan 1.x was released against; it also runs on newer Pythons.
 FROM docker.io/library/python:3.11-slim-bookworm
 
 ARG BUILD_DATE

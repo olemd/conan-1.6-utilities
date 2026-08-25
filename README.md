@@ -32,7 +32,7 @@ Given a `conanfile.py`, `conandeps` tells you three things in one report:
 
 ### Installation
 
-Requires Python 3.8–3.11 (Conan 1.x does not run on 3.12+). With
+Requires Python 3.8 or newer. With
 [uv](https://docs.astral.sh/uv/):
 
 ```bash
@@ -68,7 +68,12 @@ conandeps CONANFILE [-r REMOTE] [-pr PROFILE] [-s KEY=VALUE] [-o PKG:KEY=VALUE]
 | `--build-types` | Comma-separated build types to check. Default: `Release,Debug,RelWithDebInfo`. |
 | `-u`, `--update` | Ask the remote for newer recipes/binaries (`conan -u`). |
 | `--html FILE` | Also write a self-contained HTML report (no scripts, no external assets). |
-| `-v` | Echo Conan's own output to stderr. |
+| `-v` | Stream Conan's own output to stderr live. |
+| `-q` | Suppress the progress lines on stderr. |
+
+Progress (`[1/3] resolving graph for build_type=Release on knor ...`) goes to
+stderr; the report itself goes to stdout, so redirecting stdout to a file
+gives a clean report.
 
 Exit status: `0` all binaries present, `1` at least one is missing, `2` Conan
 failed to build the graph (for example a version conflict). This makes it

@@ -14,9 +14,12 @@ for what it does and how it is used.
 - **Conan 1.66 only.** Use the `conans.client.conan_api.ConanAPIV1` API and
   Conan 1 graph internals (`Node.binary`, `Node.dependencies`,
   `conanfile.requires`). Do not introduce Conan 2 APIs or a Conan 2 code path.
-- **Python 3.8–3.11.** Conan 1.x imports the `imp` module, which is gone in
-  3.12. `requires-python` in `pyproject.toml` and the PEP 723 header in
-  `conandeps.py` both say `<3.12`; keep them in sync.
+- **Python 3.8+.** Conan 1.66 runs on new Pythons too (it falls back to
+  `importlib` where `imp` is gone) – verified on 3.14. It does emit
+  SyntaxWarnings from its own modules there, which `conandeps.py` silences
+  before importing `conans`; keep `conans` imports deferred so that filter
+  is in place first. `requires-python` in `pyproject.toml` and the PEP 723
+  header must stay in sync.
 - **All development runs inside the container.** Use `./dev.sh <cmd>` for
   every python/pytest/ruff/uv invocation. Never run `conan` against the
   host's `~/.conan`; never `pip install` on the host. Rebuild the image with
@@ -51,6 +54,9 @@ for what it does and how it is used.
   header makes the file usable via `uv run conandeps.py` without a checkout.
 - **Exit codes:** `0` fine, `1` missing binaries, `2` Conan error. CI relies
   on this.
+- **stdout is the report, stderr is progress.** Graph resolution against a
+  remote takes a while; progress lines (`_progress`) and `--verbose` live
+  Conan output go to stderr only, so stdout can be redirected to a file.
 
 ## Workflow
 

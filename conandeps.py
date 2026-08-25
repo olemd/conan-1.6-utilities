@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # /// script
-# requires-python = ">=3.8,<3.12"
+# requires-python = ">=3.8"
 # dependencies = ["conan>=1.66,<2"]
 # ///
 """conandeps - dependency, binary-availability and override report for Conan 1.x.
@@ -39,9 +39,19 @@ import html
 import io
 import re
 import sys
+import time
+import warnings
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
+
+# Conan 1.x predates the stricter escape-sequence checks of recent Pythons and
+# emits a screenful of SyntaxWarning/DeprecationWarning from its own modules
+# (patch_ng.py, model/ref.py, ...) when they are byte-compiled.  They are not
+# actionable for the user of this tool, so silence them before Conan is
+# imported (imports of ``conans`` are deliberately deferred to _make_api()).
+warnings.filterwarnings("ignore", category=SyntaxWarning)
+warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 DEFAULT_BUILD_TYPES = ("Release", "Debug", "RelWithDebInfo")
 
@@ -107,7 +117,37 @@ class Report:
 # --------------------------------------------------------------------------- #
 # Graph collection
 # --------------------------------------------------------------------------- #
-def _make_api(log: io.StringIO):
+class _Tee(io.TextIOBase):
+    """Capture Conan's output in memory and optionally echo it live to stderr.
+
+    The in-memory copy is parsed for override warnings afterwards; the live
+    echo (``--verbose``) lets the user watch recipe downloads and remote
+    queries while a slow graph resolution is running.
+    """
+
+    def __init__(self, echo: bool):
+        self.buffer_ = io.StringIO()
+        self.echo = echo
+
+    def write(self, data: str) -> int:
+        self.buffer_.write(data)
+        if self.echo:
+            sys.stderr.write(data)
+            sys.stderr.flush()
+        return len(data)
+
+    def getvalue(self) -> str:
+        return self.buffer_.getvalue()
+
+
+def _progress(quiet: bool, msg: str) -> None:
+    """Status line on stderr so stdout stays a clean, parseable report."""
+    if not quiet:
+        sys.stderr.write("conandeps: %s\n" % msg)
+        sys.stderr.flush()
+
+
+def _make_api(log: _Tee):
     """Create a Conan API that writes everything to ``log`` instead of stdout.
 
     Colour is disabled so the override warnings can be parsed reliably.
@@ -206,8 +246,10 @@ def build_report(
     build_types: List[str],
     update: bool,
     verbose: bool = False,
+    quiet: bool = False,
 ) -> Report:
-    log = io.StringIO()
+    log = _Tee(echo=verbose)
+    _progress(quiet, "loading Conan API")
     api = _make_api(log)
     deps: "OrderedDict[str, Dep]" = OrderedDict()
     ranges: Dict[str, str] = {}
@@ -216,7 +258,14 @@ def build_report(
     profile_settings: Dict[str, str] = {}
     explicit: set = set()
 
-    for bt in build_types:
+    total = len(build_types)
+    for i, bt in enumerate(build_types, 1):
+        _progress(
+            quiet,
+            "[%d/%d] resolving graph for build_type=%s on %s ..."
+            % (i, total, bt, remote or "all remotes"),
+        )
+        t0 = time.monotonic()
         graph, root_conanfile = api.info(
             conanfile,
             remote_name=remote,
@@ -227,6 +276,12 @@ def build_report(
         )
         explicit |= _explicit_overrides(graph)
         _collect(graph, bt, deps, ranges)
+        missing = sum(1 for d in deps.values() if d.binaries.get(bt, ("",))[0] == "Missing")
+        _progress(
+            quiet,
+            "[%d/%d] %s: %d packages, %d missing binaries (%.1fs)"
+            % (i, total, bt, len(graph.nodes) - 1, missing, time.monotonic() - t0),
+        )
         if not root_requires:
             root_requires = [str(r.ref) for r in root_conanfile.requires.values()]
             profile_settings = {
@@ -235,8 +290,7 @@ def build_report(
 
     # The same override is warned once per graph build; parse once, de-duplicated.
     overrides = _parse_overrides(log.getvalue(), explicit)
-    if verbose:
-        sys.stderr.write(log.getvalue())
+    _progress(quiet, "%d overrides detected" % len(overrides))
 
     for dep in deps.values():  # keep column order stable
         dep.binaries = OrderedDict(
@@ -502,7 +556,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         help="check the remote for newer recipes/binaries (conan -u)",
     )
     p.add_argument("--html", metavar="FILE", help="also write an HTML report to FILE")
-    p.add_argument("-v", "--verbose", action="store_true", help="echo Conan's own output to stderr")
+    p.add_argument(
+        "-v", "--verbose", action="store_true", help="stream Conan's own output to stderr live"
+    )
+    p.add_argument("-q", "--quiet", action="store_true", help="no progress lines on stderr")
     args = p.parse_args(argv)
 
     build_types = [b.strip() for b in args.build_types.split(",") if b.strip()]
@@ -516,6 +573,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             build_types,
             args.update,
             args.verbose,
+            args.quiet,
         )
     except Exception as exc:  # ConanException and friends
         sys.stderr.write("conandeps: error: %s\n" % exc)
