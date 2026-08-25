@@ -92,12 +92,12 @@ profile: arch=x86_64, compiler=gcc, compiler.libcxx=libstdc++11, compiler.versio
 
 Dependencies (4) and binary availability
 
-package     kind      ctx   Release  Debug  RelWithDebInfo
-----------------------------------------------------------
-MyDepA/1.0  direct    host  knor     knor   knor
-boost/1.8   indirect  host  knor     knor   knor
-MyDepB/1.0  direct    host  knor     knor   knor
-Zigma/1.0   indirect  host  knor     knor   MISSING
+package     kind          ctx   Release  Debug  RelWithDebInfo
+--------------------------------------------------------------
+MyDepA/1.0  direct        host  knor     knor   knor
+MyDepB/1.0  direct        host  knor     knor   knor
+boost/1.8   indirect (2)  host  knor     knor   knor
+Zigma/1.0   indirect (2)  host  knor     knor   MISSING
 
 Missing binaries (1)
 
@@ -127,7 +127,11 @@ environment variable turns that off, and redirecting stdout to a file never
 produces colour codes unless you pass `--color always`. The HTML report uses
 the same colour coding.
 
-Reading the table:
+Reading the table: rows are sorted with direct dependencies first
+(alphabetically), then indirect ones by increasing level of indirection –
+`indirect (2)` is required by a direct dependency, `indirect (3)` by one of
+those, and so on (shortest path counts).
+
 
 * `knor` (a remote name) – the remote has a binary for the package_id your
   profile produces. Hover a cell in the HTML report to see the package_id.

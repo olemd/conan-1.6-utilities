@@ -81,6 +81,9 @@ class Dep:
     ref: str
     context: str  # "host" or "build"
     direct: bool = False
+    # Shortest path length from the consumer: 1 = direct, 2 = required by a
+    # direct dependency, ... Used to order the table by level of indirection.
+    depth: int = 0
     build_require: bool = False
     requires: List[str] = field(default_factory=list)  # names of its own requirements
     settings: Dict[str, str] = field(default_factory=dict)
@@ -170,6 +173,10 @@ def _node_key(node) -> str:
     return "%s#%s" % (node.ref.name, node.context)
 
 
+def _key_of(dep: Dep) -> str:
+    return "%s#%s" % (dep.name, dep.context)
+
+
 def _explicit_overrides(graph) -> set:
     """Set of (declaring ref or 'your conanfile', package name) for override=True requires."""
     result = set()
@@ -241,6 +248,22 @@ class _RemoteIndex:
         return found
 
 
+def _depths(root) -> Dict[str, int]:
+    """Breadth-first shortest distance from the root for every node key."""
+    depths: Dict[str, int] = {}
+    frontier = [(e.dst, 1) for e in root.dependencies]
+    while frontier:
+        next_frontier = []
+        for node, depth in frontier:
+            key = _node_key(node)
+            if key in depths:
+                continue
+            depths[key] = depth
+            next_frontier.extend((e.dst, depth + 1) for e in node.dependencies)
+        frontier = next_frontier
+    return depths
+
+
 def _collect(
     graph,
     build_type: str,
@@ -255,6 +278,7 @@ def _collect(
     """
     root = graph.root
     direct = {_node_key(e.dst) for e in root.dependencies}
+    depths = _depths(root)
     for node in graph.nodes:
         if node is root:
             continue
@@ -264,6 +288,8 @@ def _collect(
             dep = Dep(ref=str(node.ref), context=node.context)
             deps[key] = dep
         dep.direct = dep.direct or key in direct
+        depth = depths.get(key, 0)
+        dep.depth = min(dep.depth, depth) if dep.depth else depth
         dep.build_require = dep.build_require or any(e.build_require for e in node.dependants)
         for edge in node.dependencies:
             name = edge.dst.ref.name
@@ -347,6 +373,10 @@ def build_report(
     overrides = _parse_overrides(log.getvalue(), explicit)
     _progress(quiet, "%d overrides detected" % len(overrides))
 
+    # Direct dependencies first, then by increasing level of indirection,
+    # alphabetically within a level.  Build-context nodes sort after host.
+    ordered = sorted(deps.values(), key=lambda d: (d.depth, d.context != "host", d.name.lower()))
+    deps = OrderedDict((_key_of(d), d) for d in ordered)
     for dep in deps.values():  # keep column order stable
         dep.binaries = OrderedDict(
             (bt, dep.binaries.get(bt, ("n/a", "", None))) for bt in build_types
@@ -490,6 +520,11 @@ def _override_kind(o: Override) -> str:
     return "explicit (override=True)" if o.explicit else "implicit (newer requirement downstream)"
 
 
+def _kind(dep: Dep) -> str:
+    """'direct', or 'indirect (N)' where N is the number of hops from the consumer."""
+    return "direct" if dep.direct else "indirect (%d)" % dep.depth
+
+
 def render_text(report: Report, color: bool = False) -> str:
     pal = _Palette(color)
     out: List[str] = []
@@ -503,7 +538,7 @@ def render_text(report: Report, color: bool = False) -> str:
     w(pal.bold("Dependencies (%d) and binary availability" % len(report.deps)))
     w("")
     rows = [
-        [dep.ref, "direct" if dep.direct else "indirect", dep.context]
+        [dep.ref, _kind(dep), dep.context]
         + [_cell(*dep.binaries[bt], pal) for bt in report.build_types]
         for dep in report.deps.values()
     ]
@@ -606,7 +641,7 @@ def render_html(report: Report) -> str:
     w("<h2>Dependencies (%d) and binary availability</h2>" % len(report.deps))
     rows = []
     for dep in report.deps.values():
-        row = [e(dep.ref), "direct" if dep.direct else "indirect", e(dep.context)]
+        row = [e(dep.ref), e(_kind(dep)), e(dep.context)]
         for bt in report.build_types:
             status, pid, remote = dep.binaries[bt]
             cls = {"Remote": "ok", "Missing": "missing", "CacheOnly": "cacheonly"}.get(status, "na")

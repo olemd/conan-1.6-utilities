@@ -6,6 +6,7 @@ the usual settings but their build() does nothing, so no compiler is needed):
     consumer (conanfile.py)
       |-- libfoo/1.0        binaries: Release, Debug, RelWithDebInfo
       |     `-- libbar/1.0  binaries: Release only          <- MISSING Debug/RWDI
+      |           `-- libdeep/1.0  binaries: all three     <- depth 3
       |-- libbar/1.1 (override=True)                        <- explicit override
       |-- libbaz/2.0        binaries: all three
       |     `-- libqux/1.0  binaries: all three
@@ -17,6 +18,7 @@ remotes are never touched.
 """
 
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -177,8 +179,9 @@ def conan_env(tmp_path_factory):
                 _conan(env, "create", str(d), "-s", "build_type=%s" % bt, "--build=missing")
         _conan(env, "upload", "%s/%s" % (name, version), "-r", "test", "--all", "-c")
 
-    create("libbar", "1.0", build_types=("Release",))
-    create("libbar", "1.1", build_types=("Release",))
+    create("libdeep", "1.0")
+    create("libbar", "1.0", requires=("libdeep/1.0",), build_types=("Release",))
+    create("libbar", "1.1", requires=("libdeep/1.0",), build_types=("Release",))
     create("libfoo", "1.0", requires=("libbar/1.0",))
     create("libqux", "1.0")
     create("libqux", "1.1")
@@ -213,12 +216,35 @@ def report(conan_env):
 
 def test_dependencies_listed(report):
     refs = {d.ref for d in report.deps.values()}
-    assert refs == {"libfoo/1.0", "libbar/1.1", "libbaz/2.0", "libqux/1.1", "hdr/1.0"}
+    assert refs == {
+        "libfoo/1.0",
+        "libbar/1.1",
+        "libbaz/2.0",
+        "libqux/1.1",
+        "hdr/1.0",
+        "libdeep/1.0",
+    }
     direct = {d.ref for d in report.deps.values() if d.direct}
     assert direct == {"libfoo/1.0", "libbaz/2.0", "libqux/1.1", "hdr/1.0"}
     # libbar is only reachable through libfoo -> indirect, even though the
     # consumer mentions it with override=True.
     assert not report.deps["libbar#host"].direct
+
+
+def test_sorted_by_level_of_indirection(report):
+    order = [(d.ref, d.depth) for d in report.deps.values()]
+    # Direct deps first (alphabetical), then depth 2, then depth 3.
+    assert order == [
+        ("hdr/1.0", 1),
+        ("libbaz/2.0", 1),
+        ("libfoo/1.0", 1),
+        ("libqux/1.1", 1),  # required directly, even though libbaz also pulls it in
+        ("libbar/1.1", 2),
+        ("libdeep/1.0", 3),
+    ]
+    text = conandeps.render_text(report)
+    assert re.search(r"libbar/1\.1\s+indirect \(2\)", text)
+    assert re.search(r"libdeep/1\.0\s+indirect \(3\)", text)
 
 
 def test_missing_binaries(report):
@@ -243,7 +269,9 @@ def test_cache_only_is_not_available(conan_env):
     env = dict(os.environ)
     d = Path(conan_env["home"]) / "libbar-local"
     d.mkdir()
-    (d / "conanfile.py").write_text(RECIPE.format(name="libbar", version="1.1", requires=""))
+    (d / "conanfile.py").write_text(
+        RECIPE.format(name="libbar", version="1.1", requires='requires = ("libdeep/1.0",)')
+    )
     _conan(env, "create", str(d), "-s", "build_type=Debug")
     _conan(env, "install", "libbar/1.1@", "-s", "build_type=Release", "-r", "test")
 
@@ -275,11 +303,11 @@ def test_text_and_html_render(report, tmp_path):
     text = conandeps.render_text(report)
     assert "libbar/1.1" in text and "MISSING" in text
     table = text.split("Missing binaries")[0]
-    assert table.count("test") >= 4 * 3 - 2  # every available cell names the remote
+    assert table.count("test") >= 5 * 3 - 2  # every available cell names the remote
     assert "\033[" not in text  # no ANSI codes unless asked for
     # Missing binaries and overrides are tables with a header row.
     assert "package     build type      package_id" in text
-    assert "libbar/1.1  Debug           8bfd7e15c6920f4673ca8dee419ab5320ae445e4  no binary" in text
+    assert re.search(r"libbar/1\.1\s+Debug\s+[0-9a-f]{40}\s+no binary anywhere", text)
     assert "package     wanted      forced to   by              kind" in text
     assert "libfoo/1.0  libbar/1.0  libbar/1.1  your conanfile  explicit (override=True)" in text
     assert "overrides libbar/1.0 (explicit" in text  # tree edge annotation
