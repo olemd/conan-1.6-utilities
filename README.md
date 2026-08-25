@@ -42,10 +42,10 @@ Requires Python 3.8 or newer. With
 uv tool install git+https://kode.naiv.no/olemd/conan-1.6-utilities.git
 # with an SSH key:     uv tool install git+ssh://git@kode.naiv.no:2222/olemd/conan-1.6-utilities.git
 # from a checkout:     uv tool install .
-conandeps path/to/conanfile.py -r knor
+conandeps path/to/conanfile.py -r myremote
 
 # Or run the single file directly, no checkout needed (PEP 723 inline metadata):
-uv run conandeps.py path/to/conanfile.py -r knor
+uv run conandeps.py path/to/conanfile.py -r myremote
 ```
 
 The tool's venv carries its own Conan 1.66 and does not touch the Conan you
@@ -64,7 +64,7 @@ conandeps CONANFILE [-r REMOTE] [-pr PROFILE] [-s KEY=VALUE] [-o PKG:KEY=VALUE]
 | Option | Meaning |
 |--------|---------|
 | `CONANFILE` | Path to `conanfile.py` (or a directory containing one). |
-| `-r`, `--remote` | Remote to look for binaries in, e.g. `-r knor`. Default: all configured remotes. |
+| `-r`, `--remote` | Remote to look for binaries in, e.g. `-r myremote`. Default: all configured remotes. |
 | `-pr`, `--profile` | Profile to evaluate with (repeatable, like `conan -pr`). Default: your default profile. |
 | `-s`, `-o` | Extra settings / options, repeatable, same syntax as `conan install`. |
 | `--build-types` | Comma-separated build types to check. Default: `Release,Debug,RelWithDebInfo`. |
@@ -74,7 +74,7 @@ conandeps CONANFILE [-r REMOTE] [-pr PROFILE] [-s KEY=VALUE] [-o PKG:KEY=VALUE]
 | `-q` | Suppress the progress lines on stderr. |
 | `--color auto\|always\|never` | Colour the text report. Default `auto`: only on a terminal, honours `NO_COLOR`. |
 
-Progress (`[1/3] resolving graph for build_type=Release on knor ...`) goes to
+Progress (`[1/3] resolving graph for build_type=Release on myremote ...`) goes to
 stderr; the report itself goes to stdout, so redirecting stdout to a file
 gives a clean report.
 
@@ -85,19 +85,19 @@ usable as a CI gate.
 ### Example
 
 ```
-$ conandeps MyProject/conanfile.py -r knor
+$ conandeps MyProject/conanfile.py -r myremote
 conandeps report for MyProject/conanfile.py
-remote : knor
+remote : myremote
 profile: arch=x86_64, compiler=gcc, compiler.libcxx=libstdc++11, compiler.version=14, os=Linux
 
 Dependencies (4) and binary availability
 
-package     via                   ctx   Release  Debug  RelWithDebInfo
-----------------------------------------------------------------------
-MyDepA/1.0  -                     host  knor     knor   knor
-MyDepB/1.0  -                     host  knor     knor   knor
-boost/1.8   MyDepA (+1)           host  knor     knor   knor
-Zigma/1.0   MyDepB                host  knor     knor   MISSING
+package     via          ctx   Release   Debug     RelWithDebInfo
+-----------------------------------------------------------------
+MyDepA/1.0  -            host  myremote  myremote  myremote
+MyDepB/1.0  -            host  myremote  myremote  myremote
+boost/1.8   MyDepA (+1)  host  myremote  myremote  myremote
+Zigma/1.0   MyDepB       host  myremote  myremote  MISSING
 
 Missing binaries (1)
 
@@ -136,7 +136,7 @@ Rows are sorted direct-first, then by path, so a branch's transitive
 dependencies stay together.
 
 
-* `knor` (a remote name) – the remote has a binary for the package_id your
+* a remote name (e.g. `myremote`) – the remote has a binary for the package_id your
   profile produces. Hover a cell in the HTML report to see the package_id.
 * `not available` – the binary exists only in your local Conan cache; the
   remote does not have it, so a clean machine or CI would fail. Counts as

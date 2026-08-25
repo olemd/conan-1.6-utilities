@@ -38,9 +38,11 @@ Users install/upgrade on their own machine with
   every python/pytest/ruff/uv invocation. Never run `conan` against the
   host's `~/.conan`; never `pip install` on the host. Rebuild the image with
   `./dev.sh build` after touching `Containerfile`.
-- **Never depend on the private remote.** The real remote is called `knor`
-  and only exists on the machine where the tool is used. Tests must use the
-  local `conan_server` fixture in `tests/test_conandeps.py`.
+- **Never depend on the private remote.** The user's real remote only
+  exists on the machine where the tool is used and must not be named in the
+  repository – use a placeholder such as `myremote` in docs and help text.
+  Tests must use the local `conan_server` fixture in
+  `tests/test_conandeps.py`.
 
 ## Design decisions (and why)
 

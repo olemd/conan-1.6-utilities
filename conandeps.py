@@ -735,7 +735,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument(
         "-r",
         "--remote",
-        help="remote to look for binaries in (e.g. knor); default: all configured remotes",
+        help="remote to look for binaries in (e.g. myremote); default: all configured remotes",
     )
     p.add_argument(
         "-pr",
