@@ -9,6 +9,20 @@ Small single-file Python utilities for **Conan 1.x, targeting 1.66**. Not
 Conan 2. The first (and so far only) tool is `conandeps.py`; see `README.md`
 for what it does and how it is used.
 
+## Commands (all inside the container)
+
+```bash
+./dev.sh build                       # first time, and after editing Containerfile
+./dev.sh python -m pytest            # tests (starts a throw-away conan_server)
+./dev.sh ruff check . && ./dev.sh ruff format .
+shellcheck dev.sh                    # after editing the wrapper (runs on host)
+./dev.sh uv lock                     # after changing pyproject.toml
+```
+
+Users install/upgrade on their own machine with
+`uv tool install git+https://kode.naiv.no/olemd/conan-1.6-utilities.git` /
+`uv tool upgrade conan-utils`; a pushed commit is immediately installable.
+
 ## Hard constraints
 
 - **Conan 1.66 only.** Use the `conans.client.conan_api.ConanAPIV1` API and
@@ -37,6 +51,11 @@ for what it does and how it is used.
   replace this with settings-dict matching against `conan search` output.
 - **"Missing" means missing for the exact profile.** Not "no binary with
   that build_type at all".
+- **Dependency table order is by level of indirection.** `_depths()` does a
+  breadth-first walk from the root; `Dep.depth` is the *shortest* path (1 =
+  direct, so a package that is both direct and transitive is direct). Rows
+  sort on (depth, host before build, name) and the `level` column shows the
+  number. The tree section keeps graph order on purpose.
 - **Only the remote counts, and the source is always shown.** Conan says
   `Cache` for a locally cached binary without asking the remote, so
   `_RemoteIndex` verifies cache hits with `search_packages` on the remote.
@@ -80,6 +99,12 @@ for what it does and how it is used.
   uploads them, then wipes the cache so binaries can only come from the
   remote. Fake recipes need `--build=missing` at create time because
   dependencies' binaries are deliberately incomplete.
+- **Assert on table output with regexes, not fixed-width strings.** Column
+  widths depend on the longest ref in the fixture and package_ids change
+  whenever a fixture recipe's requirements change (`semver_direct_mode`).
+  Use `re.search(r"libbar/1\.1\s+indirect\s+2", text)` and `[0-9a-f]{40}`
+  for ids. Also: `_conan()` in the tests raises with Conan's full output on
+  failure – read it before guessing.
 - Dependencies: `uv.lock` is committed; regenerate with `./dev.sh uv lock`
   after changing `pyproject.toml`.
 - Commits: atomic, no `--amend`; run ruff + pytest + shellcheck before
