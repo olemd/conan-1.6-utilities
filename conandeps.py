@@ -433,51 +433,69 @@ _MARK = {
 }
 
 
-def _tree_lines(report: Report) -> List[str]:
-    """Render the dependency hierarchy as an indented tree, marking overrides and gaps."""
+# A tree line is (text before tags, [(tag kind, tag text)], text after tags).
+# Kinds: path, build-require, override, range, missing.  Renderers colour by
+# kind; the words are identical in text and HTML.
+_TreeLine = Tuple[str, List[Tuple[str, str]], str]
+
+
+def _tree_rows(report: Report) -> List[_TreeLine]:
+    """Build the dependency hierarchy as indented rows with typed tags."""
     by_name = {}
     for dep in report.deps.values():
         by_name.setdefault(dep.name, dep)  # host first (insertion order), build ok as fallback
     # (parent ref, child name) -> Override, so the tree can annotate the exact
     # edge whose requirement was rewritten.
     edge_overrides = {(o.package, o.old.split("/", 1)[0]): o for o in report.overrides}
-    lines: List[str] = []
+    rows: List[_TreeLine] = []
 
     def walk(name: str, parent: str, prefix: str, last: bool, seen: Tuple[str, ...]):
         dep = by_name.get(name)
         branch = "`-- " if last else "|-- "
         if dep is None:
-            lines.append(prefix + branch + name + "  (not in graph)")
+            rows.append((prefix + branch + name, [], "  (not in graph)"))
             return
-        tags = []
+        tags: List[Tuple[str, str]] = []
         if seen:  # indirect: spell out this branch's path so indentation need not be counted
-            tags.append(" -> ".join(seen + (name,)))
+            tags.append(("path", " -> ".join(seen + (name,))))
         if dep.build_require:
-            tags.append("build-require")
+            tags.append(("build-require", "build-require"))
         ov = edge_overrides.get((parent, name))
         if ov:
             tags.append(
-                "overrides %s (%s by %s)"
-                % (ov.old, "explicit" if ov.explicit else "implicit", ov.by)
+                (
+                    "override",
+                    "overrides %s (%s by %s)"
+                    % (ov.old, "explicit" if ov.explicit else "implicit", ov.by),
+                )
             )
         if dep.ref in report.ranges:
-            tags.append("from %s" % report.ranges[dep.ref])
+            tags.append(("range", "from %s" % report.ranges[dep.ref]))
         missing = dep.missing()
         if missing:
-            tags.append("MISSING: " + ",".join(missing))
-        line = prefix + branch + dep.ref + ("  [" + "; ".join(tags) + "]" if tags else "")
+            tags.append(("missing", "MISSING: " + ",".join(missing)))
         if name in seen:
-            lines.append(line + "  (cycle)")
+            rows.append((prefix + branch + dep.ref, tags, "  (cycle)"))
             return
-        lines.append(line)
+        rows.append((prefix + branch + dep.ref, tags, ""))
         child_prefix = prefix + ("    " if last else "|   ")
         for i, child in enumerate(dep.requires):
             walk(child, dep.ref, child_prefix, i == len(dep.requires) - 1, seen + (name,))
 
     roots = [d.name for d in report.deps.values() if d.direct]
-    lines.append(report.conanfile)
+    rows.append((report.conanfile, [], ""))
     for i, name in enumerate(roots):
         walk(name, "your conanfile", "", i == len(roots) - 1, ())
+    return rows
+
+
+def _tree_lines(report: Report, fmt_tag=None) -> List[str]:
+    """Flatten tree rows to lines; ``fmt_tag(kind, text)`` decorates each tag."""
+    fmt_tag = fmt_tag or (lambda _kind, text: text)
+    lines = []
+    for head, tags, tail in _tree_rows(report):
+        rendered = "  [" + "; ".join(fmt_tag(k, t) for k, t in tags) + "]" if tags else ""
+        lines.append(head + rendered + tail)
     return lines
 
 
@@ -634,9 +652,8 @@ def render_text(report: Report, color: bool = False) -> str:
     # ---- hierarchy -------------------------------------------------------
     w(pal.bold("Dependency hierarchy"))
     w("")
-    for line in _tree_lines(report):
-        line = line.replace("MISSING:", pal.bad("MISSING:")) if color else line
-        w(line)
+    tag_style = {"path": pal.dim, "override": pal.warn, "missing": pal.bad}
+    out.extend(_tree_lines(report, lambda kind, text: tag_style.get(kind, str)(text)))
     return "\n".join(out) + "\n"
 
 
@@ -652,11 +669,13 @@ th{background:#eee}code{font-size:.95em}
 .missing{color:#a40000;font-weight:700}.missing::before{content:"\\2717 "}
 .cacheonly{color:#8a5a00;font-weight:700}.cacheonly::before{content:"\\26A0 "}
 .na{color:#777}.old{color:#777;text-decoration:line-through}.new{color:#8a5a00;font-weight:700}
+.path{color:#1b4e8a}
 .explicit{color:#1b4e8a;font-weight:700}.implicit{color:#555}
 pre{background:#f5f5f5;padding:1rem;overflow-x:auto}
 @media (prefers-color-scheme:dark){body{background:#111;color:#eee}th{background:#222}
 th,td{border-color:#444}pre{background:#1c1c1c}.ok{color:#6fd66f}.missing{color:#ff7b7b}
-.cacheonly{color:#ffc857}.new{color:#ffc857}.explicit{color:#8ab8f0}.na,.old,.implicit{color:#999}}
+.cacheonly{color:#ffc857}.new{color:#ffc857}.explicit,.path{color:#8ab8f0}
+.na,.old,.implicit{color:#999}}
 """
 
 
@@ -736,7 +755,17 @@ def render_html(report: Report) -> str:
     else:
         w("<p>None detected.</p>")
 
-    w("<h2>Dependency hierarchy</h2><pre>%s</pre>" % e("\n".join(_tree_lines(report))))
+    # Tree text is escaped per fragment so the tag spans survive; the tag
+    # classes reuse the table's colours (path = dim, override = yellow, ...).
+    tag_class = {"path": "path", "override": "new", "missing": "missing", "range": "na"}
+    tree_lines = []
+    for head, tags, tail in _tree_rows(report):
+        spans = "; ".join(
+            '<span class="%s">%s</span>' % (tag_class[k], e(t)) if k in tag_class else e(t)
+            for k, t in tags
+        )
+        tree_lines.append(e(head) + ("  [" + spans + "]" if tags else "") + e(tail))
+    w("<h2>Dependency hierarchy</h2><pre>%s</pre>" % "\n".join(tree_lines))
     w("</body></html>")
     return "".join(parts)
 

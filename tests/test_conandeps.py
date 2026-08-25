@@ -344,6 +344,7 @@ def test_text_and_html_render(report, tmp_path):
 
     coloured = conandeps.render_text(report, color=True)
     assert "\033[1;31mMISSING\033[0m" in coloured and "\033[32mtest\033[0m" in coloured
+    assert "\033[2mlibfoo -> libbar -> libdeep\033[0m" in coloured  # tree path tag, dim
     # Colour codes must not break column alignment: same visible layout.
     strip = conandeps._ANSI_RE.sub
     assert strip("", coloured) == text
@@ -351,8 +352,10 @@ def test_text_and_html_render(report, tmp_path):
     page = conandeps.render_html(report)
     assert page.startswith("<!DOCTYPE html>") and 'class="missing"' in page
     assert page.count("<table>") == 3  # dependencies, missing binaries, overrides
-    # The HTML tree is the text tree verbatim, paths included.
-    assert "[libfoo -&gt; libbar -&gt; libdeep]" in page
+    # The HTML tree carries the same tags as the text tree, coloured by kind.
+    assert '[<span class="path">libfoo -&gt; libbar -&gt; libdeep</span>]' in page
+    assert '<span class="new">overrides libbar/1.0 (explicit by your conanfile)</span>' in page
+    assert '<span class="missing">MISSING: Debug,RelWithDebInfo</span>' in page
     assert 'class="explicit"' in page and 'class="implicit"' in page
     assert "<script" not in page  # self-contained, static
 

@@ -61,6 +61,11 @@ Users install/upgrade on their own machine with
   "all paths". The `via` column renders them one per line as `A -> B`
   (`→`/`<br>` in HTML); `_table()` supports multi-line cells. Rows sort on
   (depth, path, host before build, name). The tree section keeps graph order.
+- **Tree tags are typed.** `_tree_rows()` yields `(head, [(kind, text)], tail)`
+  with kinds path/build-require/override/range/missing; `_tree_lines()` (text,
+  ANSI via a `fmt_tag` callback) and the HTML renderer (`<span class=…>`)
+  colour by kind from that one source. Add new tree annotations there, never
+  by string-replacing rendered lines.
 - **Only the remote counts, and the source is always shown.** Conan says
   `Cache` for a locally cached binary without asking the remote, so
   `_RemoteIndex` verifies cache hits with `search_packages` on the remote.
