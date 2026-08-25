@@ -51,11 +51,13 @@ Users install/upgrade on their own machine with
   replace this with settings-dict matching against `conan search` output.
 - **"Missing" means missing for the exact profile.** Not "no binary with
   that build_type at all".
-- **Dependency table order is by level of indirection.** `_depths()` does a
-  breadth-first walk from the root; `Dep.depth` is the *shortest* path (1 =
-  direct, so a package that is both direct and transitive is direct). Rows
-  sort on (depth, host before build, name) and the `level` column shows the
-  number. The tree section keeps graph order on purpose.
+- **Dependency table shows the shortest path, not a level number.**
+  `_paths()` does a breadth-first walk from the root; `Dep.path` is the list
+  of package names on the *shortest* path (empty = direct, so a package that
+  is both direct and transitive is direct). The `via` column renders it as
+  `A -> B` (`→` in HTML) with `(+N)` for further direct parents from
+  `Dep.parents`. Rows sort on (depth, path, host before build, name). The
+  tree section keeps graph order and shows every path.
 - **Only the remote counts, and the source is always shown.** Conan says
   `Cache` for a locally cached binary without asking the remote, so
   `_RemoteIndex` verifies cache hits with `search_packages` on the remote.

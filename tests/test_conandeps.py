@@ -231,23 +231,26 @@ def test_dependencies_listed(report):
     assert not report.deps["libbar#host"].direct
 
 
-def test_sorted_by_level_of_indirection(report):
-    order = [(d.ref, d.depth) for d in report.deps.values()]
-    # Direct deps first (alphabetical), then depth 2, then depth 3.
+def test_sorted_by_path(report):
+    order = [(d.ref, d.path) for d in report.deps.values()]
+    # Direct deps first (alphabetical), then by shortest path.
     assert order == [
-        ("hdr/1.0", 1),
-        ("libbaz/2.0", 1),
-        ("libfoo/1.0", 1),
-        ("libqux/1.1", 1),  # required directly, even though libbaz also pulls it in
-        ("libbar/1.1", 2),
-        ("libdeep/1.0", 3),
+        ("hdr/1.0", []),
+        ("libbaz/2.0", []),
+        ("libfoo/1.0", []),
+        ("libqux/1.1", []),  # required directly, even though libbaz also pulls it in
+        ("libbar/1.1", ["libfoo"]),
+        ("libdeep/1.0", ["libfoo", "libbar"]),
     ]
+    # libqux is required by both the consumer and libbaz -> two parents.
+    assert sorted(report.deps["libqux#host"].parents) == ["libbaz", "your conanfile"]
     text = conandeps.render_text(report)
-    assert re.search(r"libbar/1\.1\s+indirect\s+2\s+host", text)
-    assert re.search(r"libdeep/1\.0\s+indirect\s+3\s+host", text)
+    assert re.search(r"hdr/1\.0\s+-\s+host", text)
+    assert re.search(r"libbar/1\.1\s+libfoo\s+host", text)
+    assert re.search(r"libdeep/1\.0\s+libfoo -> libbar\s+host", text)
     page = conandeps.render_html(report)
-    assert "<th>level</th>" in page
-    assert "<td>libdeep/1.0</td><td>indirect</td><td>3</td><td>host</td>" in page
+    assert "<th>via</th>" in page
+    assert "<td>libdeep/1.0</td><td>libfoo \u2192 libbar</td><td>host</td>" in page
 
 
 def test_missing_binaries(report):

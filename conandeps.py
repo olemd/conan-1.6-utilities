@@ -84,6 +84,11 @@ class Dep:
     # Shortest path length from the consumer: 1 = direct, 2 = required by a
     # direct dependency, ... Used to order the table by level of indirection.
     depth: int = 0
+    # Package names on the shortest path from the consumer to this package,
+    # excluding the package itself: [] for direct, ["A"] for A -> pkg, ...
+    path: List[str] = field(default_factory=list)
+    # Names of every package that directly requires this one (all paths).
+    parents: List[str] = field(default_factory=list)
     build_require: bool = False
     requires: List[str] = field(default_factory=list)  # names of its own requirements
     settings: Dict[str, str] = field(default_factory=dict)
@@ -248,20 +253,25 @@ class _RemoteIndex:
         return found
 
 
-def _depths(root) -> Dict[str, int]:
-    """Breadth-first shortest distance from the root for every node key."""
-    depths: Dict[str, int] = {}
-    frontier = [(e.dst, 1) for e in root.dependencies]
+def _paths(root) -> Dict[str, List[str]]:
+    """Breadth-first shortest path (list of package names) from the root to every node.
+
+    The path excludes the node itself, so direct dependencies get [].  Among
+    equally short paths the first one found in graph order wins; the other
+    parents are still reported through ``Dep.parents``.
+    """
+    paths: Dict[str, List[str]] = {}
+    frontier = [(e.dst, []) for e in root.dependencies]
     while frontier:
         next_frontier = []
-        for node, depth in frontier:
+        for node, path in frontier:
             key = _node_key(node)
-            if key in depths:
+            if key in paths:
                 continue
-            depths[key] = depth
-            next_frontier.extend((e.dst, depth + 1) for e in node.dependencies)
+            paths[key] = path
+            next_frontier.extend((e.dst, path + [node.ref.name]) for e in node.dependencies)
         frontier = next_frontier
-    return depths
+    return paths
 
 
 def _collect(
@@ -278,7 +288,7 @@ def _collect(
     """
     root = graph.root
     direct = {_node_key(e.dst) for e in root.dependencies}
-    depths = _depths(root)
+    paths = _paths(root)
     for node in graph.nodes:
         if node is root:
             continue
@@ -288,8 +298,14 @@ def _collect(
             dep = Dep(ref=str(node.ref), context=node.context)
             deps[key] = dep
         dep.direct = dep.direct or key in direct
-        depth = depths.get(key, 0)
-        dep.depth = min(dep.depth, depth) if dep.depth else depth
+        path = paths.get(key, [])
+        depth = len(path) + 1
+        if not dep.depth or depth < dep.depth:
+            dep.depth, dep.path = depth, path
+        for edge in node.dependants:
+            parent = "your conanfile" if edge.src is root else edge.src.ref.name
+            if parent not in dep.parents:
+                dep.parents.append(parent)
         dep.build_require = dep.build_require or any(e.build_require for e in node.dependants)
         for edge in node.dependencies:
             name = edge.dst.ref.name
@@ -375,7 +391,10 @@ def build_report(
 
     # Direct dependencies first, then by increasing level of indirection,
     # alphabetically within a level.  Build-context nodes sort after host.
-    ordered = sorted(deps.values(), key=lambda d: (d.depth, d.context != "host", d.name.lower()))
+    ordered = sorted(
+        deps.values(),
+        key=lambda d: (d.depth, [p.lower() for p in d.path], d.context != "host", d.name.lower()),
+    )
     deps = OrderedDict((_key_of(d), d) for d in ordered)
     for dep in deps.values():  # keep column order stable
         dep.binaries = OrderedDict(
@@ -520,8 +539,17 @@ def _override_kind(o: Override) -> str:
     return "explicit (override=True)" if o.explicit else "implicit (newer requirement downstream)"
 
 
-def _kind(dep: Dep) -> str:
-    return "direct" if dep.direct else "indirect"
+def _via(dep: Dep, arrow: str = " -> ") -> str:
+    """Shortest path to the package: '-' for direct, 'A -> B' for consumer -> A -> B -> pkg.
+
+    ``(+N)`` marks N further packages that also require it directly; the
+    dependency hierarchy section shows every path in full.
+    """
+    if dep.direct:
+        return "-"
+    via = arrow.join(dep.path)
+    extra = len(dep.parents) - 1
+    return via + (" (+%d)" % extra if extra > 0 else "")
 
 
 def render_text(report: Report, color: bool = False) -> str:
@@ -537,11 +565,11 @@ def render_text(report: Report, color: bool = False) -> str:
     w(pal.bold("Dependencies (%d) and binary availability" % len(report.deps)))
     w("")
     rows = [
-        [dep.ref, _kind(dep), str(dep.depth), dep.context]
+        [dep.ref, _via(dep), dep.context]
         + [_cell(*dep.binaries[bt], pal) for bt in report.build_types]
         for dep in report.deps.values()
     ]
-    out.extend(_table(["package", "kind", "level", "ctx"] + list(report.build_types), rows, pal))
+    out.extend(_table(["package", "via", "ctx"] + list(report.build_types), rows, pal))
     w("")
 
     # ---- missing binaries ------------------------------------------------
@@ -640,14 +668,14 @@ def render_html(report: Report) -> str:
     w("<h2>Dependencies (%d) and binary availability</h2>" % len(report.deps))
     rows = []
     for dep in report.deps.values():
-        row = [e(dep.ref), e(_kind(dep)), str(dep.depth), e(dep.context)]
+        row = [e(dep.ref), e(_via(dep, " \u2192 ")), e(dep.context)]
         for bt in report.build_types:
             status, pid, remote = dep.binaries[bt]
             cls = {"Remote": "ok", "Missing": "missing", "CacheOnly": "cacheonly"}.get(status, "na")
             text = e(_cell(status, pid, remote, _Palette(False)))
             row.append('<span class="%s" title="package_id %s">%s</span>' % (cls, e(pid), text))
         rows.append(row)
-    w(_html_table(["package", "kind", "level", "context"] + list(report.build_types), rows))
+    w(_html_table(["package", "via", "context"] + list(report.build_types), rows))
 
     # ---- missing binaries ------------------------------------------------
     problems = report.problems()
