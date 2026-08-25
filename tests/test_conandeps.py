@@ -228,9 +228,38 @@ def test_missing_binaries(report):
     for dep in report.deps.values():
         for bt, (status, pid, remote) in dep.binaries.items():
             if dep.ref != "libbar/1.1":
-                assert status == "Download", (dep.ref, bt, status)
+                assert status == "Remote", (dep.ref, bt, status)
                 assert remote == "test"
                 assert pid
+
+
+def test_cache_only_is_not_available(conan_env):
+    """A binary that exists only in the local cache must not count as available.
+
+    Build libbar/1.1 Debug locally without uploading it, and install the
+    Release one so it is cached too.  Release must still be attributed to the
+    remote; Debug must be reported as cache-only (a problem).
+    """
+    env = dict(os.environ)
+    d = Path(conan_env["home"]) / "libbar-local"
+    d.mkdir()
+    (d / "conanfile.py").write_text(RECIPE.format(name="libbar", version="1.1", requires=""))
+    _conan(env, "create", str(d), "-s", "build_type=Debug")
+    _conan(env, "install", "libbar/1.1@", "-s", "build_type=Release", "-r", "test")
+
+    report = conandeps.build_report(
+        conan_env["conanfile"], "test", [], [], [], list(BUILD_TYPES), update=False, quiet=True
+    )
+    libbar = report.deps["libbar#host"]
+    assert libbar.binaries["Release"][0] == "Remote"
+    assert libbar.binaries["Release"][2] == "test"
+    assert libbar.binaries["Debug"][0] == "CacheOnly"
+    assert libbar.binaries["RelWithDebInfo"][0] == "Missing"
+    assert libbar.missing() == ["Debug", "RelWithDebInfo"]
+
+    text = conandeps.render_text(report)
+    assert "not available" in text and "in local cache only" in text
+    _conan(env, "remove", "libbar/1.1@", "-f")  # leave the cache as other tests expect
 
 
 def test_overrides(report):
@@ -244,6 +273,8 @@ def test_overrides(report):
 def test_text_and_html_render(report, tmp_path):
     text = conandeps.render_text(report)
     assert "libbar/1.1" in text and "MISSING" in text
+    table = text.split("MISSING BINARIES")[0]
+    assert table.count("test") >= 4 * 3 - 2  # every available cell names the remote
     assert "overrides libbar/1.0 (explicit" in text and "explicit override=True" in text
     assert "`-- " in text or "|-- " in text  # tree drawn
     page = conandeps.render_html(report)

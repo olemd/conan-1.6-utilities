@@ -37,6 +37,12 @@ for what it does and how it is used.
   replace this with settings-dict matching against `conan search` output.
 - **"Missing" means missing for the exact profile.** Not "no binary with
   that build_type at all".
+- **Only the remote counts, and the source is always shown.** Conan says
+  `Cache` for a locally cached binary without asking the remote, so
+  `_RemoteIndex` verifies cache hits with `search_packages` on the remote.
+  Cache-only binaries are reported as `not available` and count as a
+  problem (exit 1). Every available cell names the remote. The user rejected
+  an opt-in flag for this – it is the tool's core question.
 - **Overrides are parsed from Conan's WARN output.** Conan 1 does not record
   overrides on the graph; `Requirements.update()` mutates `req.ref` in place
   and only emits `"<pkg>: requirement <old> overridden by <who> to <new>"`.

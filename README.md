@@ -20,9 +20,11 @@ Given a `conanfile.py`, `conandeps` tells you three things in one report:
 1. **What you depend on** – direct and indirect requirements, host and build
    context, as a table and as a tree.
 2. **Which binaries are missing** – for every dependency, whether a package
-   exists on the remote for **Release, Debug and RelWithDebInfo** (or any list
-   you choose), evaluated for *your exact profile* (compiler, version, libcxx,
-   arch, options, …), not "some binary with that build type".
+   exists *on the remote* for **Release, Debug and RelWithDebInfo** (or any
+   list you choose), evaluated for *your exact profile* (compiler, version,
+   libcxx, arch, options, …), not "some binary with that build type". Every
+   cell names the remote that has the binary; a binary that only lives in
+   your local cache is reported as not available.
 3. **Which requirements were overridden** – both explicit
    `self.requires("x/2.0", override=True)` and implicit ones, where a
    downstream consumer simply asks for a newer version than a transitive
@@ -91,10 +93,10 @@ Dependencies (4) and binary availability
 
 package      kind    ctx   Release         Debug           RelWithDebInfo
 -------------------------------------------------------------------------
-MyDepA/1.0   direct  host  ok              ok              ok
-boost/1.8    indir.  host  ok              ok              ok
-MyDepB/1.0   direct  host  ok              ok              ok
-Zigma/1.0    indir.  host  ok              ok              MISSING
+MyDepA/1.0   direct  host  knor            knor            knor
+boost/1.8    indir.  host  knor            knor            knor
+MyDepB/1.0   direct  host  knor            knor            knor
+Zigma/1.0    indir.  host  knor            knor            MISSING
 
 MISSING BINARIES (1 packages)
   Zigma/1.0: missing RelWithDebInfo
@@ -115,10 +117,12 @@ MyProject/conanfile.py
 
 Reading the table:
 
-* `ok` – a binary for your profile exists (in the remote, or already in your
-  cache).
-* `MISSING` – no binary for the package_id your profile produces. Hover the
-  cell in the HTML report to see the package_id.
+* `knor` (a remote name) – the remote has a binary for the package_id your
+  profile produces. Hover a cell in the HTML report to see the package_id.
+* `not available` – the binary exists only in your local Conan cache; the
+  remote does not have it, so a clean machine or CI would fail. Counts as
+  missing.
+* `MISSING` – no binary anywhere.
 * `-` – not applicable (Conan marked the node `Skip` or `Editable`).
 * Header-only packages show `ok` everywhere: their package_id ignores
   `build_type`.
@@ -142,7 +146,10 @@ dependency graph is built once per build type through Conan's own `info` API –
 the same code path `conan install` uses – and each node's binary status
 (`Cache`, `Download`, `Update`, `Missing`, …) is read back. That is why
 `package_id()` customisations, options and `default_package_id_mode` are
-honoured exactly as a real install would.
+honoured exactly as a real install would. Conan reports `Cache` without
+consulting the remote, so for those nodes the tool additionally runs a
+package search on the remote and only counts the binary as available if the
+same package_id is found there.
 
 Conan 1.x does not keep override information on the graph object; the only
 trace is a `WARN: <pkg>: requirement A overridden by B to C` line written while

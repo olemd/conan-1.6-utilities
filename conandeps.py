@@ -61,8 +61,14 @@ _OVERRIDE_RE = re.compile(
     r"requirement (?P<old>\S+) overridden by (?P<by>your conanfile|\S+) to (?P<new>\S+)"
 )
 
-# Binary states that mean "a usable binary exists" (see conans/client/graph/graph.py).
-_AVAILABLE = {"Cache", "Download", "Update"}
+# Binary states, after our post-processing of Conan's node.binary
+# (see conans/client/graph/graph.py for Conan's own set):
+#   Remote    - the remote has the binary (Conan said Download/Update, or said
+#               Cache and we confirmed the remote has the same package_id)
+#   CacheOnly - only the local cache has it; a clean machine would fail
+#   Missing   - nowhere
+_AVAILABLE = {"Remote"}
+_PROBLEM = {"Missing", "CacheOnly"}
 # States that mean "does not apply", not "missing".
 _NOT_APPLICABLE = {"Skip", "Editable"}
 
@@ -85,7 +91,8 @@ class Dep:
         return self.ref.split("/", 1)[0]
 
     def missing(self) -> List[str]:
-        return [bt for bt, (status, _, _) in self.binaries.items() if status == "Missing"]
+        """Build types without a binary on the remote (cache-only counts as missing)."""
+        return [bt for bt, (status, _, _) in self.binaries.items() if status in _PROBLEM]
 
 
 @dataclass
@@ -199,7 +206,47 @@ def _parse_overrides(text: str, explicit: set) -> List[Override]:
     return result
 
 
-def _collect(graph, build_type: str, deps: "OrderedDict[str, Dep]", ranges: Dict[str, str]):
+class _RemoteIndex:
+    """Answers "does remote X have package_id Y of ref Z?" with one search per ref.
+
+    Conan reports ``Cache`` for a binary it already has locally without ever
+    asking the remote.  The question this tool answers is whether the *remote*
+    has it, so cache hits are verified here via ``conan search`` on the remote
+    (or all remotes when none was given).
+    """
+
+    def __init__(self, api, remote: Optional[str]):
+        self._api = api
+        self._remote = remote or "all"
+        self._cache: Dict[str, Dict[str, str]] = {}  # ref -> {package_id: remote_name}
+
+    def remote_for(self, ref: str, package_id: str) -> Optional[str]:
+        if ref not in self._cache:
+            self._cache[ref] = self._search(ref)
+        return self._cache[ref].get(package_id)
+
+    def _search(self, ref: str) -> Dict[str, str]:
+        from conans.errors import ConanException
+
+        found: Dict[str, str] = {}
+        try:
+            info = self._api.search_packages(ref, remote_name=self._remote)
+        except ConanException:
+            return found  # recipe not on the remote at all
+        for remote_info in info.get("results", []):
+            for item in remote_info.get("items", []):
+                for pkg in item.get("packages", []):
+                    found.setdefault(pkg["id"], remote_info["remote"])
+        return found
+
+
+def _collect(
+    graph,
+    build_type: str,
+    deps: "OrderedDict[str, Dep]",
+    ranges: Dict[str, str],
+    index: _RemoteIndex,
+):
     """Merge one build_type's graph into ``deps``.
 
     The graph may differ between build types (conditional requirements), so we
@@ -231,10 +278,16 @@ def _collect(graph, build_type: str, deps: "OrderedDict[str, Dep]", ranges: Dict
         except Exception:  # header-only / no settings
             dep.settings = {}
         status = node.binary or "Unknown"
+        package_id = node.package_id or ""
+        remote = node.binary_remote.name if node.binary_remote else None
         if status in _NOT_APPLICABLE:
             status = "n/a"
-        remote = node.binary_remote.name if node.binary_remote else None
-        dep.binaries[build_type] = (status, node.package_id or "", remote)
+        elif status in ("Download", "Update"):
+            status = "Remote"
+        elif status == "Cache":
+            remote = index.remote_for(str(node.ref), package_id)
+            status = "Remote" if remote else "CacheOnly"
+        dep.binaries[build_type] = (status, package_id, remote)
 
 
 def build_report(
@@ -257,6 +310,7 @@ def build_report(
     root_requires: List[str] = []
     profile_settings: Dict[str, str] = {}
     explicit: set = set()
+    index = _RemoteIndex(api, remote)
 
     total = len(build_types)
     for i, bt in enumerate(build_types, 1):
@@ -275,8 +329,8 @@ def build_report(
             update=update,
         )
         explicit |= _explicit_overrides(graph)
-        _collect(graph, bt, deps, ranges)
-        missing = sum(1 for d in deps.values() if d.binaries.get(bt, ("",))[0] == "Missing")
+        _collect(graph, bt, deps, ranges, index)
+        missing = sum(1 for d in deps.values() if d.binaries.get(bt, ("",))[0] in _PROBLEM)
         _progress(
             quiet,
             "[%d/%d] %s: %d packages, %d missing binaries (%.1fs)"
@@ -312,9 +366,7 @@ def build_report(
 # Text rendering
 # --------------------------------------------------------------------------- #
 _MARK = {
-    "Cache": "ok",
-    "Download": "ok",
-    "Update": "ok",
+    "CacheOnly": "not available",
     "Missing": "MISSING",
     "Build": "build",
     "n/a": "-",
@@ -369,6 +421,13 @@ def _tree_lines(report: Report) -> List[str]:
     return lines
 
 
+def _cell(status: str, _package_id: str, remote: Optional[str]) -> str:
+    """Cell text: the remote that has the binary, or why it is not available."""
+    if status == "Remote":
+        return remote or "remote"
+    return _MARK.get(status, status)
+
+
 def render_text(report: Report) -> str:
     out: List[str] = []
     w = out.append
@@ -388,10 +447,7 @@ def render_text(report: Report) -> str:
     w("-" * len(header))
     for dep in report.deps.values():
         kind = "direct" if dep.direct else "indir."
-        cells = "  ".join(
-            "%-14s" % _MARK.get(dep.binaries[bt][0], dep.binaries[bt][0])
-            for bt in report.build_types
-        )
+        cells = "  ".join("%-14s" % _cell(*dep.binaries[bt]) for bt in report.build_types)
         w("%-*s  %-6s  %-4s  %s" % (refw, dep.ref, kind, dep.context, cells))
     w("")
 
@@ -402,9 +458,11 @@ def render_text(report: Report) -> str:
         for dep in problems:
             w("  %s: missing %s" % (dep.ref, ", ".join(dep.missing())))
             for bt in dep.missing():
-                w("      %s package_id %s" % (bt, dep.binaries[bt][1]))
+                status, pid, _ = dep.binaries[bt]
+                note = "  (in local cache only, not on the remote)" if status == "CacheOnly" else ""
+                w("      %s package_id %s%s" % (bt, pid, note))
     else:
-        w("All packages have binaries for: " + ", ".join(report.build_types))
+        w("All packages have binaries on the remote for: " + ", ".join(report.build_types))
     w("")
 
     # ---- overrides -------------------------------------------------------
@@ -470,9 +528,9 @@ def render_html(report: Report) -> str:
         )
         for bt in report.build_types:
             status, pid, remote = dep.binaries[bt]
-            cls = "ok" if status in _AVAILABLE else "missing" if status == "Missing" else "na"
-            title = ' title="package_id %s%s"' % (e(pid), " @ " + e(remote) if remote else "")
-            w('<td class="%s"%s>%s</td>' % (cls, title, e(status)))
+            cls = "ok" if status in _AVAILABLE else "missing" if status in _PROBLEM else "na"
+            title = ' title="package_id %s"' % e(pid)
+            w('<td class="%s"%s>%s</td>' % (cls, title, e(_cell(status, pid, remote))))
         w("</tr>")
     w("</table>")
 
