@@ -351,6 +351,8 @@ def test_text_and_html_render(report, tmp_path):
     page = conandeps.render_html(report)
     assert page.startswith("<!DOCTYPE html>") and 'class="missing"' in page
     assert page.count("<table>") == 3  # dependencies, missing binaries, overrides
+    # The HTML tree is the text tree verbatim, paths included.
+    assert "[libfoo -&gt; libbar -&gt; libdeep]" in page
     assert 'class="explicit"' in page and 'class="implicit"' in page
     assert "<script" not in page  # self-contained, static
 
