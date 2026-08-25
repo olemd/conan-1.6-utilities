@@ -2,6 +2,10 @@
 name = "conan-utils"
 version = "0.1.0"
 description = "Small utilities for Conan 1.x (targets 1.66)"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Ole-Morten Duesund" }]
 # Conan 1.x imports the `imp` module, which was removed in Python 3.12.
 requires-python = ">=3.8,<3.12"
 dependencies = ["conan>=1.66,<2"]

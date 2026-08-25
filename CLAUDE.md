@@ -1,0 +1,78 @@
+# CLAUDE.md
+
+Guidance for working on this repository. It records decisions made when the
+project was started (August 2026) that are not obvious from the code.
+
+## What this is
+
+Small single-file Python utilities for **Conan 1.x, targeting 1.66**. Not
+Conan 2. The first (and so far only) tool is `conandeps.py`; see `README.md`
+for what it does and how it is used.
+
+## Hard constraints
+
+- **Conan 1.66 only.** Use the `conans.client.conan_api.ConanAPIV1` API and
+  Conan 1 graph internals (`Node.binary`, `Node.dependencies`,
+  `conanfile.requires`). Do not introduce Conan 2 APIs or a Conan 2 code path.
+- **Python 3.8–3.11.** Conan 1.x imports the `imp` module, which is gone in
+  3.12. `requires-python` in `pyproject.toml` and the PEP 723 header in
+  `conandeps.py` both say `<3.12`; keep them in sync.
+- **All development runs inside the container.** Use `./dev.sh <cmd>` for
+  every python/pytest/ruff/uv invocation. Never run `conan` against the
+  host's `~/.conan`; never `pip install` on the host. Rebuild the image with
+  `./dev.sh build` after touching `Containerfile`.
+- **Never depend on the private remote.** The real remote is called `knor`
+  and only exists on the machine where the tool is used. Tests must use the
+  local `conan_server` fixture in `tests/test_conandeps.py`.
+
+## Design decisions (and why)
+
+- **Binary availability is computed via Conan's graph, not `conan search`.**
+  The graph is built once per build type through `ConanAPIV1.info()` and each
+  node's `binary` status is read. This honours `package_id()` overrides,
+  options and `default_package_id_mode` exactly like `conan install`. Do not
+  replace this with settings-dict matching against `conan search` output.
+- **"Missing" means missing for the exact profile.** Not "no binary with
+  that build_type at all".
+- **Overrides are parsed from Conan's WARN output.** Conan 1 does not record
+  overrides on the graph; `Requirements.update()` mutates `req.ref` in place
+  and only emits `"<pkg>: requirement <old> overridden by <who> to <new>"`.
+  `conandeps` captures the output stream with a non-coloured `ConanOutput`
+  and matches `_OVERRIDE_RE`. `test_overrides` pins this format – if a Conan
+  patch release changes the wording, that test is the alarm.
+- **Both explicit and implicit overrides are reported.** `override=True`
+  requirements are collected from `conanfile.requires` to label an override
+  as explicit; everything else parsed from the WARN lines is implicit.
+- **`range_ref` is not a version range after an override.** Conan reuses
+  `Requirement.range_ref` to hold the pre-override reference, so only treat
+  it as a range when `req.version_range` is truthy.
+- **Single file, stdlib + Conan only.** No third-party deps beyond Conan.
+  Packaging is hatchling with `only-include = ["conandeps.py"]`; the PEP 723
+  header makes the file usable via `uv run conandeps.py` without a checkout.
+- **Exit codes:** `0` fine, `1` missing binaries, `2` Conan error. CI relies
+  on this.
+
+## Workflow
+
+- Lint/format: `./dev.sh ruff check .` and `./dev.sh ruff format .`
+  (config in `pyproject.toml`, target py38, line length 100). Run
+  `shellcheck dev.sh` after editing the wrapper.
+- Tests: `./dev.sh python -m pytest`. The fixture spins up `conan_server`
+  on a free port with a pre-written `server.conf` (the port cannot be given
+  on the command line), creates fake packages whose `build()` does nothing,
+  uploads them, then wipes the cache so binaries can only come from the
+  remote. Fake recipes need `--build=missing` at create time because
+  dependencies' binaries are deliberately incomplete.
+- Dependencies: `uv.lock` is committed; regenerate with `./dev.sh uv lock`
+  after changing `pyproject.toml`.
+- Commits: atomic, no `--amend`; run ruff + pytest + shellcheck before
+  committing. Add a memory of anything a future session could not derive
+  from the repository.
+
+## Adding another tool
+
+Follow the `conandeps.py` pattern: one executable file with a module
+docstring explaining *how* and *why*, a PEP 723 header, a `main(argv)` that
+returns an exit code, a `[project.scripts]` entry, an `only-include` entry in
+`pyproject.toml`, tests under `tests/` using the shared `conan_env` fixture,
+and a section in `README.md`.
