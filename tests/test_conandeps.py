@@ -344,7 +344,10 @@ def test_text_and_html_render(report, tmp_path):
 
     coloured = conandeps.render_text(report, color=True)
     assert "\033[1;31mMISSING\033[0m" in coloured and "\033[32mtest\033[0m" in coloured
-    assert "\033[2mlibfoo -> libbar -> libdeep\033[0m" in coloured  # tree path tag, dim
+    # Tree tags: path dim, override yellow, MISSING bold red.
+    assert "\033[2mlibfoo -> libbar -> libdeep\033[0m" in coloured
+    assert "\033[33moverrides libbar/1.0 (explicit by your conanfile)\033[0m" in coloured
+    assert "\033[1;31mMISSING: Debug,RelWithDebInfo\033[0m" in coloured
     # Colour codes must not break column alignment: same visible layout.
     strip = conandeps._ANSI_RE.sub
     assert strip("", coloured) == text
