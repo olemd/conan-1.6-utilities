@@ -37,6 +37,7 @@ from __future__ import annotations
 import argparse
 import html
 import io
+import os
 import re
 import sys
 import time
@@ -421,65 +422,140 @@ def _tree_lines(report: Report) -> List[str]:
     return lines
 
 
-def _cell(status: str, _package_id: str, remote: Optional[str]) -> str:
+class _Palette:
+    """ANSI colours for the terminal report; a no-op when disabled.
+
+    Colour is a readability aid only: every state is also spelled out in
+    words, so a colour-blind reader or a log file loses nothing.
+    """
+
+    def __init__(self, enabled: bool):
+        self.enabled = enabled
+
+    def _wrap(self, code: str, text: str) -> str:
+        return "\033[%sm%s\033[0m" % (code, text) if self.enabled else text
+
+    def ok(self, text: str) -> str:
+        return self._wrap("32", text)  # green
+
+    def bad(self, text: str) -> str:
+        return self._wrap("1;31", text)  # bold red
+
+    def warn(self, text: str) -> str:
+        return self._wrap("33", text)  # yellow
+
+    def dim(self, text: str) -> str:
+        return self._wrap("2", text)
+
+    def bold(self, text: str) -> str:
+        return self._wrap("1", text)
+
+
+_ANSI_RE = re.compile(r"\033\[[0-9;]*m")
+
+
+def _visible_len(text: str) -> int:
+    return len(_ANSI_RE.sub("", text))
+
+
+def _table(headers: List[str], rows: List[List[str]], pal: _Palette) -> List[str]:
+    """Render a column-aligned text table; cells may contain ANSI colour codes."""
+    widths = [len(h) for h in headers]
+    for row in rows:
+        for i, cell in enumerate(row):
+            widths[i] = max(widths[i], _visible_len(cell))
+
+    def fmt(cells: List[str]) -> str:
+        padded = [c + " " * (widths[i] - _visible_len(c)) for i, c in enumerate(cells)]
+        return "  ".join(padded).rstrip()
+
+    lines = [pal.bold(fmt(headers)), "-" * (sum(widths) + 2 * (len(widths) - 1))]
+    lines.extend(fmt(r) for r in rows)
+    return lines
+
+
+def _cell(status: str, _package_id: str, remote: Optional[str], pal: _Palette) -> str:
     """Cell text: the remote that has the binary, or why it is not available."""
     if status == "Remote":
-        return remote or "remote"
-    return _MARK.get(status, status)
+        return pal.ok(remote or "remote")
+    text = _MARK.get(status, status)
+    if status == "Missing":
+        return pal.bad(text)
+    if status == "CacheOnly":
+        return pal.warn(text)
+    return pal.dim(text)
 
 
-def render_text(report: Report) -> str:
+def _override_kind(o: Override) -> str:
+    return "explicit (override=True)" if o.explicit else "implicit (newer requirement downstream)"
+
+
+def render_text(report: Report, color: bool = False) -> str:
+    pal = _Palette(color)
     out: List[str] = []
     w = out.append
-    w("conandeps report for %s" % report.conanfile)
+    w(pal.bold("conandeps report for %s" % report.conanfile))
     w("remote : %s" % (report.remote or "(all configured remotes)"))
     w("profile: " + ", ".join("%s=%s" % kv for kv in report.profile.items()))
     w("")
 
-    # ---- table -----------------------------------------------------------
-    w("Dependencies (%d) and binary availability" % len(report.deps))
+    # ---- dependencies ----------------------------------------------------
+    w(pal.bold("Dependencies (%d) and binary availability" % len(report.deps)))
     w("")
-    refw = max([len(d.ref) for d in report.deps.values()] + [len("package")])
-    header = "%-*s  %-6s  %-4s  " % (refw, "package", "kind", "ctx") + "  ".join(
-        "%-14s" % bt for bt in report.build_types
-    )
-    w(header)
-    w("-" * len(header))
-    for dep in report.deps.values():
-        kind = "direct" if dep.direct else "indir."
-        cells = "  ".join("%-14s" % _cell(*dep.binaries[bt]) for bt in report.build_types)
-        w("%-*s  %-6s  %-4s  %s" % (refw, dep.ref, kind, dep.context, cells))
+    rows = [
+        [dep.ref, "direct" if dep.direct else "indirect", dep.context]
+        + [_cell(*dep.binaries[bt], pal) for bt in report.build_types]
+        for dep in report.deps.values()
+    ]
+    out.extend(_table(["package", "kind", "ctx"] + list(report.build_types), rows, pal))
     w("")
 
-    # ---- problems --------------------------------------------------------
+    # ---- missing binaries ------------------------------------------------
     problems = report.problems()
+    n_missing = sum(len(d.missing()) for d in problems)
+    w(pal.bold("Missing binaries (%d)" % n_missing))
+    w("")
     if problems:
-        w("MISSING BINARIES (%d packages)" % len(problems))
+        rows = []
         for dep in problems:
-            w("  %s: missing %s" % (dep.ref, ", ".join(dep.missing())))
             for bt in dep.missing():
                 status, pid, _ = dep.binaries[bt]
-                note = "  (in local cache only, not on the remote)" if status == "CacheOnly" else ""
-                w("      %s package_id %s%s" % (bt, pid, note))
+                reason = (
+                    pal.warn("not on remote, in local cache only")
+                    if status == "CacheOnly"
+                    else pal.bad("no binary anywhere")
+                )
+                rows.append([dep.ref, bt, pid, reason])
+        out.extend(_table(["package", "build type", "package_id", "reason"], rows, pal))
     else:
-        w("All packages have binaries on the remote for: " + ", ".join(report.build_types))
+        w(pal.ok("All packages have binaries on the remote for: " + ", ".join(report.build_types)))
     w("")
 
     # ---- overrides -------------------------------------------------------
-    w("Overrides (%d)" % len(report.overrides))
-    if not report.overrides:
-        w("  none detected")
-    for o in report.overrides:
-        kind = "explicit override=True" if o.explicit else "implicit (newer direct requirement)"
-        w("  %s wanted %s" % (o.package, o.old))
-        w("      -> forced to %s by %s  [%s]" % (o.new, o.by, kind))
-        if o.new in report.ranges:
-            w("         (%s resolved from %s)" % (o.new, report.ranges[o.new]))
+    w(pal.bold("Overrides (%d)" % len(report.overrides)))
+    w("")
+    if report.overrides:
+        rows = [
+            [
+                o.package,
+                pal.dim(o.old),
+                pal.warn(o.new),
+                o.by,
+                pal.bold(_override_kind(o)) if o.explicit else _override_kind(o),
+            ]
+            for o in report.overrides
+        ]
+        out.extend(_table(["package", "wanted", "forced to", "by", "kind"], rows, pal))
+    else:
+        w("none detected")
     w("")
 
     # ---- hierarchy -------------------------------------------------------
-    w("Dependency hierarchy")
-    out.extend(_tree_lines(report))
+    w(pal.bold("Dependency hierarchy"))
+    w("")
+    for line in _tree_lines(report):
+        line = line.replace("MISSING:", pal.bad("MISSING:")) if color else line
+        w(line)
     return "\n".join(out) + "\n"
 
 
@@ -489,14 +565,25 @@ def render_text(report: Report) -> str:
 _CSS = """
 body{font:14px/1.4 system-ui,sans-serif;margin:2rem;color:#1b1b1b;background:#fff}
 h1,h2{font-weight:600}table{border-collapse:collapse;margin:1rem 0}
-th,td{border:1px solid #bbb;padding:.3rem .6rem;text-align:left}
-th{background:#eee}.ok{color:#1b6e1b}.ok::before{content:"\\2713 "}
+th,td{border:1px solid #bbb;padding:.3rem .6rem;text-align:left;vertical-align:top}
+th{background:#eee}code{font-size:.95em}
+.ok{color:#1b6e1b}.ok::before{content:"\\2713 "}
 .missing{color:#a40000;font-weight:700}.missing::before{content:"\\2717 "}
-.na{color:#777}pre{background:#f5f5f5;padding:1rem;overflow-x:auto}
-.tag{font-size:.85em;color:#555}
+.cacheonly{color:#8a5a00;font-weight:700}.cacheonly::before{content:"\\26A0 "}
+.na{color:#777}.old{color:#777;text-decoration:line-through}.new{color:#8a5a00;font-weight:700}
+.explicit{color:#1b4e8a;font-weight:700}.implicit{color:#555}
+pre{background:#f5f5f5;padding:1rem;overflow-x:auto}
 @media (prefers-color-scheme:dark){body{background:#111;color:#eee}th{background:#222}
-th,td{border-color:#444}pre{background:#1c1c1c}.ok{color:#6fd66f}.missing{color:#ff7b7b}}
+th,td{border-color:#444}pre{background:#1c1c1c}.ok{color:#6fd66f}.missing{color:#ff7b7b}
+.cacheonly{color:#ffc857}.new{color:#ffc857}.explicit{color:#8ab8f0}.na,.old,.implicit{color:#999}}
 """
+
+
+def _html_table(headers: List[str], rows: List[List[str]]) -> str:
+    """Rows are lists of already-escaped/markup cell strings."""
+    head = "".join("<th>%s</th>" % html.escape(h) for h in headers)
+    body = "".join("<tr>%s</tr>" % "".join("<td>%s</td>" % c for c in row) for row in rows)
+    return "<table><tr>%s</tr>%s</table>" % (head, body)
 
 
 def render_html(report: Report) -> str:
@@ -515,49 +602,56 @@ def render_html(report: Report) -> str:
         )
     )
 
-    w("<h2>Dependencies and binary availability</h2><table>")
-    w(
-        "<tr><th>package</th><th>kind</th><th>context</th>"
-        + "".join("<th>%s</th>" % e(bt) for bt in report.build_types)
-        + "</tr>"
-    )
+    # ---- dependencies ----------------------------------------------------
+    w("<h2>Dependencies (%d) and binary availability</h2>" % len(report.deps))
+    rows = []
     for dep in report.deps.values():
-        w(
-            "<tr><td>%s</td><td>%s</td><td>%s</td>"
-            % (e(dep.ref), "direct" if dep.direct else "indirect", e(dep.context))
-        )
+        row = [e(dep.ref), "direct" if dep.direct else "indirect", e(dep.context)]
         for bt in report.build_types:
             status, pid, remote = dep.binaries[bt]
-            cls = "ok" if status in _AVAILABLE else "missing" if status in _PROBLEM else "na"
-            title = ' title="package_id %s"' % e(pid)
-            w('<td class="%s"%s>%s</td>' % (cls, title, e(_cell(status, pid, remote))))
-        w("</tr>")
-    w("</table>")
+            cls = {"Remote": "ok", "Missing": "missing", "CacheOnly": "cacheonly"}.get(status, "na")
+            text = e(_cell(status, pid, remote, _Palette(False)))
+            row.append('<span class="%s" title="package_id %s">%s</span>' % (cls, e(pid), text))
+        rows.append(row)
+    w(_html_table(["package", "kind", "context"] + list(report.build_types), rows))
 
+    # ---- missing binaries ------------------------------------------------
     problems = report.problems()
-    w("<h2>Missing binaries (%d)</h2>" % len(problems))
+    n_missing = sum(len(d.missing()) for d in problems)
+    w("<h2>Missing binaries (%d)</h2>" % n_missing)
     if problems:
-        w(
-            "<ul>"
-            + "".join(
-                "<li>%s: missing %s</li>" % (e(d.ref), e(", ".join(d.missing()))) for d in problems
-            )
-            + "</ul>"
-        )
+        rows = []
+        for dep in problems:
+            for bt in dep.missing():
+                status, pid, _ = dep.binaries[bt]
+                reason = (
+                    '<span class="cacheonly">not on remote, in local cache only</span>'
+                    if status == "CacheOnly"
+                    else '<span class="missing">no binary anywhere</span>'
+                )
+                rows.append([e(dep.ref), e(bt), "<code>%s</code>" % e(pid), reason])
+        w(_html_table(["package", "build type", "package_id", "reason"], rows))
     else:
-        w("<p>All packages have binaries for %s.</p>" % e(", ".join(report.build_types)))
+        w(
+            '<p class="ok">All packages have binaries on the remote for %s.</p>'
+            % e(", ".join(report.build_types))
+        )
 
+    # ---- overrides -------------------------------------------------------
     w("<h2>Overrides (%d)</h2>" % len(report.overrides))
     if report.overrides:
-        w("<ul>")
-        for o in report.overrides:
-            kind = "explicit override=True" if o.explicit else "implicit"
-            w(
-                "<li>%s wanted <code>%s</code> &rarr; forced to <code>%s</code> by %s "
-                '<span class="tag">[%s]</span></li>'
-                % (e(o.package), e(o.old), e(o.new), e(o.by), kind)
-            )
-        w("</ul>")
+        rows = [
+            [
+                e(o.package),
+                '<span class="old">%s</span>' % e(o.old),
+                '<span class="new">%s</span>' % e(o.new),
+                e(o.by),
+                '<span class="%s">%s</span>'
+                % ("explicit" if o.explicit else "implicit", e(_override_kind(o))),
+            ]
+            for o in report.overrides
+        ]
+        w(_html_table(["package", "wanted", "forced to", "by", "kind"], rows))
     else:
         w("<p>None detected.</p>")
 
@@ -618,7 +712,16 @@ def main(argv: Optional[List[str]] = None) -> int:
         "-v", "--verbose", action="store_true", help="stream Conan's own output to stderr live"
     )
     p.add_argument("-q", "--quiet", action="store_true", help="no progress lines on stderr")
+    p.add_argument(
+        "--color",
+        choices=("auto", "always", "never"),
+        default="auto",
+        help="colour the text report (default: auto = only on a terminal, honours NO_COLOR)",
+    )
     args = p.parse_args(argv)
+    color = args.color == "always" or (
+        args.color == "auto" and sys.stdout.isatty() and not os.environ.get("NO_COLOR")
+    )
 
     build_types = [b.strip() for b in args.build_types.split(",") if b.strip()]
     try:
@@ -637,7 +740,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         sys.stderr.write("conandeps: error: %s\n" % exc)
         return 2
 
-    sys.stdout.write(render_text(report))
+    sys.stdout.write(render_text(report, color))
     if args.html:
         with open(args.html, "w", encoding="utf-8") as fh:
             fh.write(render_html(report))

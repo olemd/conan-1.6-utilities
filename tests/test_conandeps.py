@@ -259,6 +259,7 @@ def test_cache_only_is_not_available(conan_env):
 
     text = conandeps.render_text(report)
     assert "not available" in text and "in local cache only" in text
+    assert 'class="cacheonly"' in conandeps.render_html(report)
     _conan(env, "remove", "libbar/1.1@", "-f")  # leave the cache as other tests expect
 
 
@@ -273,12 +274,26 @@ def test_overrides(report):
 def test_text_and_html_render(report, tmp_path):
     text = conandeps.render_text(report)
     assert "libbar/1.1" in text and "MISSING" in text
-    table = text.split("MISSING BINARIES")[0]
+    table = text.split("Missing binaries")[0]
     assert table.count("test") >= 4 * 3 - 2  # every available cell names the remote
-    assert "overrides libbar/1.0 (explicit" in text and "explicit override=True" in text
+    assert "\033[" not in text  # no ANSI codes unless asked for
+    # Missing binaries and overrides are tables with a header row.
+    assert "package     build type      package_id" in text
+    assert "libbar/1.1  Debug           8bfd7e15c6920f4673ca8dee419ab5320ae445e4  no binary" in text
+    assert "package     wanted      forced to   by              kind" in text
+    assert "libfoo/1.0  libbar/1.0  libbar/1.1  your conanfile  explicit (override=True)" in text
+    assert "overrides libbar/1.0 (explicit" in text  # tree edge annotation
+
+    coloured = conandeps.render_text(report, color=True)
+    assert "\033[1;31mMISSING\033[0m" in coloured and "\033[32mtest\033[0m" in coloured
+    # Colour codes must not break column alignment: same visible layout.
+    strip = conandeps._ANSI_RE.sub
+    assert strip("", coloured) == text
     assert "`-- " in text or "|-- " in text  # tree drawn
     page = conandeps.render_html(report)
     assert page.startswith("<!DOCTYPE html>") and 'class="missing"' in page
+    assert page.count("<table>") == 3  # dependencies, missing binaries, overrides
+    assert 'class="explicit"' in page and 'class="implicit"' in page
     assert "<script" not in page  # self-contained, static
 
 

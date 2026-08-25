@@ -72,6 +72,7 @@ conandeps CONANFILE [-r REMOTE] [-pr PROFILE] [-s KEY=VALUE] [-o PKG:KEY=VALUE]
 | `--html FILE` | Also write a self-contained HTML report (no scripts, no external assets). |
 | `-v` | Stream Conan's own output to stderr live. |
 | `-q` | Suppress the progress lines on stderr. |
+| `--color auto\|always\|never` | Colour the text report. Default `auto`: only on a terminal, honours `NO_COLOR`. |
 
 Progress (`[1/3] resolving graph for build_type=Release on knor ...`) goes to
 stderr; the report itself goes to stdout, so redirecting stdout to a file
@@ -91,22 +92,27 @@ profile: arch=x86_64, compiler=gcc, compiler.libcxx=libstdc++11, compiler.versio
 
 Dependencies (4) and binary availability
 
-package      kind    ctx   Release         Debug           RelWithDebInfo
--------------------------------------------------------------------------
-MyDepA/1.0   direct  host  knor            knor            knor
-boost/1.8    indir.  host  knor            knor            knor
-MyDepB/1.0   direct  host  knor            knor            knor
-Zigma/1.0    indir.  host  knor            knor            MISSING
+package     kind      ctx   Release  Debug  RelWithDebInfo
+----------------------------------------------------------
+MyDepA/1.0  direct    host  knor     knor   knor
+boost/1.8   indirect  host  knor     knor   knor
+MyDepB/1.0  direct    host  knor     knor   knor
+Zigma/1.0   indirect  host  knor     knor   MISSING
 
-MISSING BINARIES (1 packages)
-  Zigma/1.0: missing RelWithDebInfo
-      RelWithDebInfo package_id 3f9c...e21a
+Missing binaries (1)
+
+package    build type      package_id                                reason
+---------------------------------------------------------------------------------------
+Zigma/1.0  RelWithDebInfo  3f9c2b7d0e6a4f18c5d9a0b3e7f1c2d4a5b6e21a  no binary anywhere
 
 Overrides (1)
-  Zigma/1.0 wanted boost/1.7
-      -> forced to boost/1.8 by your conanfile  [implicit (newer direct requirement)]
+
+package    wanted     forced to  by              kind
+-------------------------------------------------------------------------------------
+Zigma/1.0  boost/1.7  boost/1.8  your conanfile  implicit (newer requirement downstream)
 
 Dependency hierarchy
+
 MyProject/conanfile.py
 |-- MyDepA/1.0
 |   `-- boost/1.8
@@ -114,6 +120,12 @@ MyProject/conanfile.py
     `-- Zigma/1.0  [MISSING: RelWithDebInfo]
         `-- boost/1.8  [overrides boost/1.7 (implicit by your conanfile)]
 ```
+
+On a terminal the tables are coloured (green = on the remote, red = missing,
+yellow = cache-only / overridden version); `--color never` or the `NO_COLOR`
+environment variable turns that off, and redirecting stdout to a file never
+produces colour codes unless you pass `--color always`. The HTML report uses
+the same colour coding.
 
 Reading the table:
 

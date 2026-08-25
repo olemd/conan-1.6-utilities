@@ -60,6 +60,11 @@ for what it does and how it is used.
   header makes the file usable via `uv run conandeps.py` without a checkout.
 - **Exit codes:** `0` fine, `1` missing binaries, `2` Conan error. CI relies
   on this.
+- **Tables and colour, consistently.** Dependencies, missing binaries and
+  overrides are all rendered through the same `_table()` helper (text) and
+  `_html_table()` (HTML). Colour is an aid only – every state is also spelled
+  out in words – and `_table()` aligns on *visible* width so ANSI codes never
+  break columns. `--color auto` is the default (terminal + no `NO_COLOR`).
 - **stdout is the report, stderr is progress.** Graph resolution against a
   remote takes a while; progress lines (`_progress`) and `--verbose` live
   Conan output go to stderr only, so stdout can be redirected to a file.
