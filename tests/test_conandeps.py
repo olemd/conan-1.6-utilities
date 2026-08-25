@@ -242,8 +242,10 @@ def test_sorted_by_path(report):
         ("libbar/1.1", ["libfoo"]),
         ("libdeep/1.0", ["libfoo", "libbar"]),
     ]
-    # libqux is required by both the consumer and libbaz -> two parents.
+    # libqux is required by both the consumer and libbaz -> two parents, but
+    # it is direct, so the via column just says "-".
     assert sorted(report.deps["libqux#host"].parents) == ["libbaz", "your conanfile"]
+    assert conandeps._via(report.deps["libqux#host"]) == "-"
     text = conandeps.render_text(report)
     assert re.search(r"hdr/1\.0\s+-\s+host", text)
     assert re.search(r"libbar/1\.1\s+libfoo\s+host", text)
@@ -251,6 +253,24 @@ def test_sorted_by_path(report):
     page = conandeps.render_html(report)
     assert "<th>via</th>" in page
     assert "<td>libdeep/1.0</td><td>libfoo \u2192 libbar</td><td>host</td>" in page
+
+
+def test_via_lists_every_parent_path():
+    boost = conandeps.Dep(ref="boost/1.8", context="host", depth=2, path=["MyDepA"])
+    boost.parents = ["MyDepA", "Zigma"]
+    boost.paths = [["MyDepA"], ["MyDepB", "Zigma"]]
+    assert conandeps._via(boost) == "MyDepA\nMyDepB -> Zigma"
+    assert conandeps._via(boost, " > ", "; ") == "MyDepA; MyDepB > Zigma"
+    # Multi-line cells spread the row; other columns stay aligned and blank.
+    lines = conandeps._table(
+        ["package", "via", "ctx"],
+        [["boost/1.8", conandeps._via(boost), "host"]],
+        conandeps._Palette(False),
+    )
+    assert lines[2:] == [
+        "boost/1.8  MyDepA           host",
+        "           MyDepB -> Zigma",
+    ]
 
 
 def test_missing_binaries(report):

@@ -92,12 +92,13 @@ profile: arch=x86_64, compiler=gcc, compiler.libcxx=libstdc++11, compiler.versio
 
 Dependencies (4) and binary availability
 
-package     via          ctx   Release   Debug     RelWithDebInfo
------------------------------------------------------------------
-MyDepA/1.0  -            host  myremote  myremote  myremote
-MyDepB/1.0  -            host  myremote  myremote  myremote
-boost/1.8   MyDepA (+1)  host  myremote  myremote  myremote
-Zigma/1.0   MyDepB       host  myremote  myremote  MISSING
+package     via              ctx   Release   Debug     RelWithDebInfo
+---------------------------------------------------------------------
+MyDepA/1.0  -                host  myremote  myremote  myremote
+MyDepB/1.0  -                host  myremote  myremote  myremote
+boost/1.8   MyDepA           host  myremote  myremote  myremote
+            MyDepB -> Zigma
+Zigma/1.0   MyDepB           host  myremote  myremote  MISSING
 
 Missing binaries (1)
 
@@ -129,11 +130,12 @@ the same colour coding.
 
 Reading the table: the `via` column is the shortest path from your conanfile
 to the package – `-` for a direct dependency, `MyDepB` for something MyDepB
-requires, `MyDepB -> Zigma` for something Zigma requires, and so on. `(+N)`
-means N other packages also require it directly (boost above is pulled in by
-both MyDepA and Zigma); the dependency hierarchy section shows every path.
-Rows are sorted direct-first, then by path, so a branch's transitive
-dependencies stay together.
+requires, `MyDepB -> Zigma` for something Zigma requires, and so on. A
+package required by several others gets one line per parent (boost above is
+pulled in by both MyDepA and Zigma), shortest path first. Rows are sorted
+direct-first, then by path, so a branch's transitive dependencies stay
+together; the dependency hierarchy section at the end shows the same
+information as a tree.
 
 
 * a remote name (e.g. `myremote`) – the remote has a binary for the package_id your

@@ -56,10 +56,11 @@ Users install/upgrade on their own machine with
 - **Dependency table shows the shortest path, not a level number.**
   `_paths()` does a breadth-first walk from the root; `Dep.path` is the list
   of package names on the *shortest* path (empty = direct, so a package that
-  is both direct and transitive is direct). The `via` column renders it as
-  `A -> B` (`→` in HTML) with `(+N)` for further direct parents from
-  `Dep.parents`. Rows sort on (depth, path, host before build, name). The
-  tree section keeps graph order and shows every path.
+  is both direct and transitive is direct). `Dep.paths` holds one path per
+  direct parent (shortest path to that parent + parent) – bounded, unlike
+  "all paths". The `via` column renders them one per line as `A -> B`
+  (`→`/`<br>` in HTML); `_table()` supports multi-line cells. Rows sort on
+  (depth, path, host before build, name). The tree section keeps graph order.
 - **Only the remote counts, and the source is always shown.** Conan says
   `Cache` for a locally cached binary without asking the remote, so
   `_RemoteIndex` verifies cache hits with `search_packages` on the remote.

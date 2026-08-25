@@ -89,6 +89,9 @@ class Dep:
     path: List[str] = field(default_factory=list)
     # Names of every package that directly requires this one (all paths).
     parents: List[str] = field(default_factory=list)
+    # One path per direct parent: shortest path to that parent plus the
+    # parent itself.  Bounded by the number of parents, unlike "all paths".
+    paths: List[List[str]] = field(default_factory=list)
     build_require: bool = False
     requires: List[str] = field(default_factory=list)  # names of its own requirements
     settings: Dict[str, str] = field(default_factory=dict)
@@ -303,9 +306,14 @@ def _collect(
         if not dep.depth or depth < dep.depth:
             dep.depth, dep.path = depth, path
         for edge in node.dependants:
-            parent = "your conanfile" if edge.src is root else edge.src.ref.name
+            if edge.src is root:
+                parent, via = "your conanfile", []
+            else:
+                parent = edge.src.ref.name
+                via = paths.get(_node_key(edge.src), []) + [parent]
             if parent not in dep.parents:
                 dep.parents.append(parent)
+                dep.paths.append(via)
         dep.build_require = dep.build_require or any(e.build_require for e in node.dependants)
         for edge in node.dependencies:
             name = edge.dst.ref.name
@@ -508,18 +516,27 @@ def _visible_len(text: str) -> int:
 
 
 def _table(headers: List[str], rows: List[List[str]], pal: _Palette) -> List[str]:
-    """Render a column-aligned text table; cells may contain ANSI colour codes."""
+    """Render a column-aligned text table.
+
+    Cells may contain ANSI colour codes (alignment uses the visible width) and
+    newlines: a multi-line cell spreads the row over several lines, with the
+    other columns left blank on the continuation lines.
+    """
+    split_rows = [[c.split("\n") for c in row] for row in rows]
     widths = [len(h) for h in headers]
-    for row in rows:
-        for i, cell in enumerate(row):
-            widths[i] = max(widths[i], _visible_len(cell))
+    for row in split_rows:
+        for i, cell_lines in enumerate(row):
+            widths[i] = max([widths[i]] + [_visible_len(line) for line in cell_lines])
 
     def fmt(cells: List[str]) -> str:
         padded = [c + " " * (widths[i] - _visible_len(c)) for i, c in enumerate(cells)]
         return "  ".join(padded).rstrip()
 
     lines = [pal.bold(fmt(headers)), "-" * (sum(widths) + 2 * (len(widths) - 1))]
-    lines.extend(fmt(r) for r in rows)
+    for row in split_rows:
+        height = max(len(cell_lines) for cell_lines in row)
+        for n in range(height):
+            lines.append(fmt([cell[n] if n < len(cell) else "" for cell in row]))
     return lines
 
 
@@ -539,17 +556,17 @@ def _override_kind(o: Override) -> str:
     return "explicit (override=True)" if o.explicit else "implicit (newer requirement downstream)"
 
 
-def _via(dep: Dep, arrow: str = " -> ") -> str:
-    """Shortest path to the package: '-' for direct, 'A -> B' for consumer -> A -> B -> pkg.
+def _via(dep: Dep, arrow: str = " -> ", newline: str = "\n") -> str:
+    """How the package is reached: '-' for direct, otherwise one line per path.
 
-    ``(+N)`` marks N further packages that also require it directly; the
-    dependency hierarchy section shows every path in full.
+    ``A -> B`` means consumer -> A -> B -> pkg.  A package required by several
+    others gets one line per parent (shortest path to that parent), shortest
+    first.
     """
     if dep.direct:
         return "-"
-    via = arrow.join(dep.path)
-    extra = len(dep.parents) - 1
-    return via + (" (+%d)" % extra if extra > 0 else "")
+    paths = sorted(dep.paths, key=lambda p: (len(p), [x.lower() for x in p]))
+    return newline.join(arrow.join(p) for p in paths)
 
 
 def render_text(report: Report, color: bool = False) -> str:
@@ -668,7 +685,7 @@ def render_html(report: Report) -> str:
     w("<h2>Dependencies (%d) and binary availability</h2>" % len(report.deps))
     rows = []
     for dep in report.deps.values():
-        row = [e(dep.ref), e(_via(dep, " \u2192 ")), e(dep.context)]
+        row = [e(dep.ref), e(_via(dep, " \u2192 ")).replace("\n", "<br>"), e(dep.context)]
         for bt in report.build_types:
             status, pid, remote = dep.binaries[bt]
             cls = {"Remote": "ok", "Missing": "missing", "CacheOnly": "cacheonly"}.get(status, "na")
