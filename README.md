@@ -178,6 +178,25 @@ trace is a `WARN: <pkg>: requirement A overridden by B to C` line written while
 the graph is resolved. The tool captures Conan's output stream during graph
 construction and parses those lines. A test pins the message format.
 
+## Releases
+
+Tagged releases with a built wheel, source distribution and `SHA256SUMS` are
+published on the
+[releases page](https://kode.naiv.no/olemd/conan-1.6-utilities/releases).
+Latest: [v0.1.0](https://kode.naiv.no/olemd/conan-1.6-utilities/releases/tag/v0.1.0).
+
+Install a specific release with
+
+```bash
+uv tool install git+https://kode.naiv.no/olemd/conan-1.6-utilities.git@v0.1.0
+# or, from the downloaded wheel:
+uv tool install conan_utils-0.1.0-py3-none-any.whl
+```
+
+To cut a release: bump `version` in `pyproject.toml`, push an annotated tag
+`vX.Y.Z`, build with `./dev.sh uv build`, and create the Forgejo release with
+the artifacts attached (`fj release create --tag vX.Y.Z --attach ...`).
+
 ## Development
 
 Everything runs inside the `conan-utils-dev` container (Conan 1.66, Python
