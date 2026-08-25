@@ -1,6 +1,6 @@
 # Development / runtime container for the conan utilities.
 # Pinned to Conan 1.66 (the version we target) on Python 3.11 — Conan 1.x
-# still imports distutils, which was removed in Python 3.12.
+# still imports the `imp` module, which was removed in Python 3.12.
 FROM docker.io/library/python:3.11-slim-bookworm
 
 ARG BUILD_DATE
@@ -10,7 +10,7 @@ LABEL org.opencontainers.image.created="${BUILD_DATE}" \
 RUN printf 'build_date=%s\ngit_revision=%s\n' "${BUILD_DATE}" "${GIT_REVISION}" > /etc/build-info
 
 RUN pip install --no-cache-dir --root-user-action=ignore \
-        "conan==1.66.0" pytest ruff shellcheck-py
+        "conan==1.66.0" pytest ruff shellcheck-py uv
 
 # Non-root user so files created in the mounted workdir are owned by the caller.
 RUN useradd -m -u 1000 dev

@@ -15,6 +15,28 @@ Given a `conanfile.py`, `conandeps` reports:
   dependency declared) – shown both as a list and on the edges of the
   dependency tree.
 
+### Installing with uv
+
+```
+uv tool install git+https://<your-forge>/conan-utils   # or: uv tool install . from a checkout
+conandeps path/to/conanfile.py -r knor
+```
+
+This puts a `conandeps` command on your PATH in its own virtualenv with
+Conan 1.66 — it does not touch or depend on the Conan you use for builds
+(but it does read the same `~/.conan` config, profiles and remotes).
+
+The script also carries PEP 723 inline metadata, so the single file works on
+its own without a checkout:
+
+```
+uv run conandeps.py path/to/conanfile.py -r knor
+```
+
+Python 3.8–3.11 is required; Conan 1.x does not run on 3.12+.
+
+### Usage
+
 ```
 ./conandeps.py path/to/conanfile.py -r knor                  # text report
 ./conandeps.py path/to/conanfile.py -r knor -pr myprofile    # explicit profile

@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.8,<3.12"
+# dependencies = ["conan>=1.66,<2"]
+# ///
 """conandeps - dependency, binary-availability and override report for Conan 1.x.
 
 Given a conanfile.py this tool:
