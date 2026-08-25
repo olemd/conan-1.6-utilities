@@ -116,10 +116,10 @@ Dependency hierarchy
 
 MyProject/conanfile.py
 |-- MyDepA/1.0
-|   `-- boost/1.8
+|   `-- boost/1.8  [MyDepA -> boost]
 `-- MyDepB/1.0
-    `-- Zigma/1.0  [MISSING: RelWithDebInfo]
-        `-- boost/1.8  [overrides boost/1.7 (implicit by your conanfile)]
+    `-- Zigma/1.0  [MyDepB -> Zigma; MISSING: RelWithDebInfo]
+        `-- boost/1.8  [MyDepB -> Zigma -> boost; overrides boost/1.7 (implicit by your conanfile)]
 ```
 
 On a terminal the tables are coloured (green = on the remote, red = missing,
@@ -135,7 +135,8 @@ package required by several others gets one line per parent (boost above is
 pulled in by both MyDepA and Zigma), shortest path first. Rows are sorted
 direct-first, then by path, so a branch's transitive dependencies stay
 together; the dependency hierarchy section at the end shows the same
-information as a tree.
+information as a tree, and every indirect node there also spells out the
+path of its branch so deep indentation never has to be counted.
 
 
 * a remote name (e.g. `myremote`) – the remote has a binary for the package_id your

@@ -337,6 +337,10 @@ def test_text_and_html_render(report, tmp_path):
     assert "package     wanted      forced to   by              kind" in text
     assert "libfoo/1.0  libbar/1.0  libbar/1.1  your conanfile  explicit (override=True)" in text
     assert "overrides libbar/1.0 (explicit" in text  # tree edge annotation
+    # Tree lines carry the full path of their branch; direct nodes do not.
+    tree = text.split("Dependency hierarchy")[1]
+    assert re.search(r"`-- libdeep/1\.0  \[libfoo -> libbar -> libdeep\]", tree)
+    assert re.search(r"\|-- libfoo/1\.0\n", tree)
 
     coloured = conandeps.render_text(report, color=True)
     assert "\033[1;31mMISSING\033[0m" in coloured and "\033[32mtest\033[0m" in coloured

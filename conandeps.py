@@ -450,6 +450,8 @@ def _tree_lines(report: Report) -> List[str]:
             lines.append(prefix + branch + name + "  (not in graph)")
             return
         tags = []
+        if seen:  # indirect: spell out this branch's path so indentation need not be counted
+            tags.append(" -> ".join(seen + (name,)))
         if dep.build_require:
             tags.append("build-require")
         ov = edge_overrides.get((parent, name))
