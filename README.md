@@ -37,8 +37,9 @@ Requires Python 3.8–3.11 (Conan 1.x does not run on 3.12+). With
 
 ```bash
 # As a command on your PATH, in its own venv with Conan 1.66:
-uv tool install git+ssh://git@kode.naiv.no:2222/olemd/conan-1.6-utilities.git
-# or, from a checkout: uv tool install .
+uv tool install git+https://kode.naiv.no/olemd/conan-1.6-utilities.git
+# with an SSH key:     uv tool install git+ssh://git@kode.naiv.no:2222/olemd/conan-1.6-utilities.git
+# from a checkout:     uv tool install .
 conandeps path/to/conanfile.py -r knor
 
 # Or run the single file directly, no checkout needed (PEP 723 inline metadata):
