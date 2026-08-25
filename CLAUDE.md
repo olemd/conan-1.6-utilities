@@ -112,14 +112,25 @@ Users install/upgrade on their own machine with
 - **Assert on table output with regexes, not fixed-width strings.** Column
   widths depend on the longest ref in the fixture and package_ids change
   whenever a fixture recipe's requirements change (`semver_direct_mode`).
-  Use `re.search(r"libbar/1\.1\s+indirect\s+2", text)` and `[0-9a-f]{40}`
+  Use `re.search(r"libbar/1\.1\s+libfoo\s+host", text)` and `[0-9a-f]{40}`
   for ids. Also: `_conan()` in the tests raises with Conan's full output on
   failure – read it before guessing.
+- **Use the `conan_env` fixture only for graph/remote behaviour.** Anything
+  about rendering (`_via`, `_table`, `_tree_rows`, HTML) should be a
+  fixture-free unit test on hand-built `Dep` objects, like
+  `test_via_lists_every_parent_path` – instant, and no `conan_server`.
 - Dependencies: `uv.lock` is committed; regenerate with `./dev.sh uv lock`
   after changing `pyproject.toml`.
 - Commits: atomic, no `--amend`; run ruff + pytest + shellcheck before
   committing. Add a memory of anything a future session could not derive
   from the repository.
+- Releases: bump `version` in `pyproject.toml` (must match the tag), commit,
+  then `git tag -a vX.Y.Z && git push origin vX.Y.Z`, build with
+  `./dev.sh uv build` (writes `dist/`, gitignored), write `SHA256SUMS`, and
+  `fj release create --tag vX.Y.Z --attach dist/<wheel> --attach dist/<sdist>
+  --attach dist/SHA256SUMS --body "..." "vX.Y.Z"` from inside the repo –
+  `fj release` does **not** accept `--repo`. Then update the "Latest:" line
+  in the README's Releases section and delete `dist/`.
 
 ## Adding another tool
 
