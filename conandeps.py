@@ -521,8 +521,7 @@ def _override_kind(o: Override) -> str:
 
 
 def _kind(dep: Dep) -> str:
-    """'direct', or 'indirect (N)' where N is the number of hops from the consumer."""
-    return "direct" if dep.direct else "indirect (%d)" % dep.depth
+    return "direct" if dep.direct else "indirect"
 
 
 def render_text(report: Report, color: bool = False) -> str:
@@ -538,11 +537,11 @@ def render_text(report: Report, color: bool = False) -> str:
     w(pal.bold("Dependencies (%d) and binary availability" % len(report.deps)))
     w("")
     rows = [
-        [dep.ref, _kind(dep), dep.context]
+        [dep.ref, _kind(dep), str(dep.depth), dep.context]
         + [_cell(*dep.binaries[bt], pal) for bt in report.build_types]
         for dep in report.deps.values()
     ]
-    out.extend(_table(["package", "kind", "ctx"] + list(report.build_types), rows, pal))
+    out.extend(_table(["package", "kind", "level", "ctx"] + list(report.build_types), rows, pal))
     w("")
 
     # ---- missing binaries ------------------------------------------------
@@ -641,14 +640,14 @@ def render_html(report: Report) -> str:
     w("<h2>Dependencies (%d) and binary availability</h2>" % len(report.deps))
     rows = []
     for dep in report.deps.values():
-        row = [e(dep.ref), e(_kind(dep)), e(dep.context)]
+        row = [e(dep.ref), e(_kind(dep)), str(dep.depth), e(dep.context)]
         for bt in report.build_types:
             status, pid, remote = dep.binaries[bt]
             cls = {"Remote": "ok", "Missing": "missing", "CacheOnly": "cacheonly"}.get(status, "na")
             text = e(_cell(status, pid, remote, _Palette(False)))
             row.append('<span class="%s" title="package_id %s">%s</span>' % (cls, e(pid), text))
         rows.append(row)
-    w(_html_table(["package", "kind", "context"] + list(report.build_types), rows))
+    w(_html_table(["package", "kind", "level", "context"] + list(report.build_types), rows))
 
     # ---- missing binaries ------------------------------------------------
     problems = report.problems()

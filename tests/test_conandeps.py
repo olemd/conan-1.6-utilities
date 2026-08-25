@@ -243,8 +243,11 @@ def test_sorted_by_level_of_indirection(report):
         ("libdeep/1.0", 3),
     ]
     text = conandeps.render_text(report)
-    assert re.search(r"libbar/1\.1\s+indirect \(2\)", text)
-    assert re.search(r"libdeep/1\.0\s+indirect \(3\)", text)
+    assert re.search(r"libbar/1\.1\s+indirect\s+2\s+host", text)
+    assert re.search(r"libdeep/1\.0\s+indirect\s+3\s+host", text)
+    page = conandeps.render_html(report)
+    assert "<th>level</th>" in page
+    assert "<td>libdeep/1.0</td><td>indirect</td><td>3</td><td>host</td>" in page
 
 
 def test_missing_binaries(report):
