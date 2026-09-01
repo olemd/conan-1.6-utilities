@@ -703,9 +703,12 @@ def render_html(report: Report) -> str:
     )
 
     # ---- dependencies ----------------------------------------------------
+    # Unlike the text table (depth-based report order), HTML sorts on the via
+    # column so packages reached through the same chain sit together; direct
+    # deps ("-" sorts before letters) come first, names break ties.
     w("<h2>Dependencies (%d) and binary availability</h2>" % len(report.deps))
     rows = []
-    for dep in report.deps.values():
+    for dep in sorted(report.deps.values(), key=lambda d: (_via(d).lower(), d.name.lower())):
         row = [e(dep.ref), e(_via(dep, " \u2192 ")).replace("\n", "<br>"), e(dep.context)]
         for bt in report.build_types:
             status, pid, remote = dep.binaries[bt]
@@ -715,13 +718,34 @@ def render_html(report: Report) -> str:
         rows.append(row)
     w(_html_table(["package", "via", "context"] + list(report.build_types), rows))
 
+    # ---- overrides -------------------------------------------------------
+    # Overrides come before missing binaries in HTML: an override is often the
+    # *cause* of a missing binary, so the reader meets it first.  Both tables
+    # sort alphabetically on package (report order is graph order).
+    w("<h2>Overrides (%d)</h2>" % len(report.overrides))
+    if report.overrides:
+        rows = [
+            [
+                e(o.package),
+                '<span class="old">%s</span>' % e(o.old),
+                '<span class="new">%s</span>' % e(o.new),
+                e(o.by),
+                '<span class="%s">%s</span>'
+                % ("explicit" if o.explicit else "implicit", e(_override_kind(o))),
+            ]
+            for o in sorted(report.overrides, key=lambda o: (o.package.lower(), o.old.lower()))
+        ]
+        w(_html_table(["package", "wanted", "forced to", "by", "kind"], rows))
+    else:
+        w("<p>None detected.</p>")
+
     # ---- missing binaries ------------------------------------------------
     problems = report.problems()
     n_missing = sum(len(d.missing()) for d in problems)
     w("<h2>Missing binaries (%d)</h2>" % n_missing)
     if problems:
         rows = []
-        for dep in problems:
+        for dep in sorted(problems, key=lambda d: d.ref.lower()):
             for bt in dep.missing():
                 status, pid, _ = dep.binaries[bt]
                 reason = (
@@ -736,24 +760,6 @@ def render_html(report: Report) -> str:
             '<p class="ok">All packages have binaries on the remote for %s.</p>'
             % e(", ".join(report.build_types))
         )
-
-    # ---- overrides -------------------------------------------------------
-    w("<h2>Overrides (%d)</h2>" % len(report.overrides))
-    if report.overrides:
-        rows = [
-            [
-                e(o.package),
-                '<span class="old">%s</span>' % e(o.old),
-                '<span class="new">%s</span>' % e(o.new),
-                e(o.by),
-                '<span class="%s">%s</span>'
-                % ("explicit" if o.explicit else "implicit", e(_override_kind(o))),
-            ]
-            for o in report.overrides
-        ]
-        w(_html_table(["package", "wanted", "forced to", "by", "kind"], rows))
-    else:
-        w("<p>None detected.</p>")
 
     # Tree text is escaped per fragment so the tag spans survive; the tag
     # classes reuse the table's colours (path = dim, override = yellow, ...).

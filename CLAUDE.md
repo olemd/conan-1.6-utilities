@@ -59,8 +59,10 @@ Users install/upgrade on their own machine with
   is both direct and transitive is direct). `Dep.paths` holds one path per
   direct parent (shortest path to that parent + parent) – bounded, unlike
   "all paths". The `via` column renders them one per line as `A -> B`
-  (`→`/`<br>` in HTML); `_table()` supports multi-line cells. Rows sort on
-  (depth, path, host before build, name). The tree section keeps graph order.
+  (`→`/`<br>` in HTML); `_table()` supports multi-line cells. Text rows sort
+  on (depth, path, host before build, name); HTML re-sorts on (via, name) so
+  each chain reads as a block, puts overrides before missing binaries, and
+  sorts both alphabetically. The tree section keeps graph order.
 - **Tree tags are typed.** `_tree_rows()` yields `(head, [(kind, text)], tail)`
   with kinds path/build-require/override/range/missing; `_tree_lines()` (text,
   ANSI via a `fmt_tag` callback) and the HTML renderer (`<span class=…>`)
