@@ -589,6 +589,18 @@ def _via(dep: Dep, arrow: str = " -> ", newline: str = "\n") -> str:
     return newline.join(arrow.join(p) for p in paths)
 
 
+# Render-order keys shared by the text and HTML renderers.  Dependency rows
+# group by their via chain (direct deps' "-" sorts before letters, so they
+# stay on top); the overrides and missing-binaries tables go alphabetical.
+# report.deps itself keeps the depth-based graph order.
+def _dep_key(dep: Dep):
+    return (_via(dep).lower(), dep.name.lower())
+
+
+def _override_key(o: Override):
+    return (o.package.lower(), o.old.lower())
+
+
 def render_text(report: Report, color: bool = False) -> str:
     pal = _Palette(color)
     out: List[str] = []
@@ -604,33 +616,14 @@ def render_text(report: Report, color: bool = False) -> str:
     rows = [
         [dep.ref, _via(dep), dep.context]
         + [_cell(*dep.binaries[bt], pal) for bt in report.build_types]
-        for dep in report.deps.values()
+        for dep in sorted(report.deps.values(), key=_dep_key)
     ]
     out.extend(_table(["package", "via", "ctx"] + list(report.build_types), rows, pal))
     w("")
 
-    # ---- missing binaries ------------------------------------------------
-    problems = report.problems()
-    n_missing = sum(len(d.missing()) for d in problems)
-    w(pal.bold("Missing binaries (%d)" % n_missing))
-    w("")
-    if problems:
-        rows = []
-        for dep in problems:
-            for bt in dep.missing():
-                status, pid, _ = dep.binaries[bt]
-                reason = (
-                    pal.warn("not on remote, in local cache only")
-                    if status == "CacheOnly"
-                    else pal.bad("no binary anywhere")
-                )
-                rows.append([dep.ref, bt, pid, reason])
-        out.extend(_table(["package", "build type", "package_id", "reason"], rows, pal))
-    else:
-        w(pal.ok("All packages have binaries on the remote for: " + ", ".join(report.build_types)))
-    w("")
-
     # ---- overrides -------------------------------------------------------
+    # Overrides come before missing binaries: an override is often the
+    # *cause* of a missing binary, so the reader meets it first.
     w(pal.bold("Overrides (%d)" % len(report.overrides)))
     w("")
     if report.overrides:
@@ -642,11 +635,32 @@ def render_text(report: Report, color: bool = False) -> str:
                 o.by,
                 pal.bold(_override_kind(o)) if o.explicit else _override_kind(o),
             ]
-            for o in report.overrides
+            for o in sorted(report.overrides, key=_override_key)
         ]
         out.extend(_table(["package", "wanted", "forced to", "by", "kind"], rows, pal))
     else:
         w("none detected")
+    w("")
+
+    # ---- missing binaries ------------------------------------------------
+    problems = report.problems()
+    n_missing = sum(len(d.missing()) for d in problems)
+    w(pal.bold("Missing binaries (%d)" % n_missing))
+    w("")
+    if problems:
+        rows = []
+        for dep in sorted(problems, key=lambda d: d.ref.lower()):
+            for bt in dep.missing():
+                status, pid, _ = dep.binaries[bt]
+                reason = (
+                    pal.warn("not on remote, in local cache only")
+                    if status == "CacheOnly"
+                    else pal.bad("no binary anywhere")
+                )
+                rows.append([dep.ref, bt, pid, reason])
+        out.extend(_table(["package", "build type", "package_id", "reason"], rows, pal))
+    else:
+        w(pal.ok("All packages have binaries on the remote for: " + ", ".join(report.build_types)))
     w("")
 
     # ---- hierarchy -------------------------------------------------------
@@ -703,12 +717,9 @@ def render_html(report: Report) -> str:
     )
 
     # ---- dependencies ----------------------------------------------------
-    # Unlike the text table (depth-based report order), HTML sorts on the via
-    # column so packages reached through the same chain sit together; direct
-    # deps ("-" sorts before letters) come first, names break ties.
     w("<h2>Dependencies (%d) and binary availability</h2>" % len(report.deps))
     rows = []
-    for dep in sorted(report.deps.values(), key=lambda d: (_via(d).lower(), d.name.lower())):
+    for dep in sorted(report.deps.values(), key=_dep_key):
         row = [e(dep.ref), e(_via(dep, " \u2192 ")).replace("\n", "<br>"), e(dep.context)]
         for bt in report.build_types:
             status, pid, remote = dep.binaries[bt]
@@ -718,10 +729,7 @@ def render_html(report: Report) -> str:
         rows.append(row)
     w(_html_table(["package", "via", "context"] + list(report.build_types), rows))
 
-    # ---- overrides -------------------------------------------------------
-    # Overrides come before missing binaries in HTML: an override is often the
-    # *cause* of a missing binary, so the reader meets it first.  Both tables
-    # sort alphabetically on package (report order is graph order).
+    # ---- overrides (before missing binaries, see render_text) ------------
     w("<h2>Overrides (%d)</h2>" % len(report.overrides))
     if report.overrides:
         rows = [
@@ -733,7 +741,7 @@ def render_html(report: Report) -> str:
                 '<span class="%s">%s</span>'
                 % ("explicit" if o.explicit else "implicit", e(_override_kind(o))),
             ]
-            for o in sorted(report.overrides, key=lambda o: (o.package.lower(), o.old.lower()))
+            for o in sorted(report.overrides, key=_override_key)
         ]
         w(_html_table(["package", "wanted", "forced to", "by", "kind"], rows))
     else:

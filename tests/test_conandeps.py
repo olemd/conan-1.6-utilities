@@ -273,52 +273,61 @@ def test_via_lists_every_parent_path():
     ]
 
 
-def _html_report(deps, overrides=()):
-    """Hand-built single-build-type Report for HTML rendering tests."""
+def _mini_report(deps, overrides=()):
+    """Hand-built single-build-type Report for renderer ordering tests."""
     return conandeps.Report("conanfile.py", "test", {}, ["Release"], deps, list(overrides), {}, [])
 
 
-def _html_dep(ref, direct=False, paths=(), status="Remote"):
+def _mini_dep(ref, direct=False, paths=(), status="Remote"):
     dep = conandeps.Dep(ref=ref, context="host", direct=direct)
     dep.paths = [list(p) for p in paths]
     dep.binaries = {"Release": (status, "f" * 40, "test" if status == "Remote" else None)}
     return dep
 
 
-def test_html_dependencies_sort_by_via_then_name():
-    """HTML dependency rows sort on the via column, then package name.
+def test_dependency_rows_sort_by_via_then_name():
+    """Text and HTML dependency rows sort on the via column, then package name.
 
     Unlike the report's depth-first order, this groups each chain: the depth-3
     package via "apple -> beta" comes before the depth-2 one via "zebra".
     Direct deps stay on top because their via cell "-" sorts before letters.
     """
     deps = {  # deliberately scrambled insertion order
-        "alpha#host": _html_dep("alpha/1.0", paths=[["zebra"]]),
-        "deep#host": _html_dep("deep/1.0", paths=[["apple", "beta"]]),
-        "zdirect#host": _html_dep("zdirect/1.0", direct=True),
-        "beta#host": _html_dep("beta/1.0", paths=[["apple"]]),
+        "alpha#host": _mini_dep("alpha/1.0", paths=[["zebra"]]),
+        "deep#host": _mini_dep("deep/1.0", paths=[["apple", "beta"]]),
+        "zdirect#host": _mini_dep("zdirect/1.0", direct=True),
+        "beta#host": _mini_dep("beta/1.0", paths=[["apple"]]),
     }
-    page = conandeps.render_html(_html_report(deps))
-    table = page.split("<h2>Overrides")[0]
-    assert re.findall(r"<td>(\w+)/1\.0</td>", table) == ["zdirect", "beta", "deep", "alpha"]
+    expected = ["zdirect", "beta", "deep", "alpha"]
+    page = conandeps.render_html(_mini_report(deps))
+    assert re.findall(r"<td>(\w+)/1\.0</td>", page.split("<h2>Overrides")[0]) == expected
+    text = conandeps.render_text(_mini_report(deps))
+    assert re.findall(r"^(\w+)/1\.0", text.split("Overrides")[0], re.M) == expected
 
 
-def test_html_overrides_before_missing_and_both_sorted():
+def test_overrides_before_missing_and_both_sorted():
     """Overrides section precedes missing binaries; both sort alphabetically."""
     deps = {
-        "zeta#host": _html_dep("zeta/1.0", direct=True, status="Missing"),
-        "alpha#host": _html_dep("alpha/1.0", direct=True, status="Missing"),
+        "zeta#host": _mini_dep("zeta/1.0", direct=True, status="Missing"),
+        "alpha#host": _mini_dep("alpha/1.0", direct=True, status="Missing"),
     }
     overrides = [
         conandeps.Override("zeta/1.0", "x/1.0", "x/1.1", "your conanfile", False),
         conandeps.Override("alpha/1.0", "y/1.0", "y/1.1", "your conanfile", True),
     ]
-    page = conandeps.render_html(_html_report(deps, overrides))
+    page = conandeps.render_html(_mini_report(deps, overrides))
     assert page.index("<h2>Overrides") < page.index("<h2>Missing binaries")
     ov_table = page.split("<h2>Overrides")[1].split("<h2>")[0]
     assert re.findall(r"<td>(\w+)/1\.0</td>", ov_table) == ["alpha", "zeta"]
     missing_table = page.split("<h2>Missing binaries")[1].split("<h2>")[0]
     assert re.findall(r"<td>(\w+)/1\.0</td>", missing_table) == ["alpha", "zeta"]
+
+    text = conandeps.render_text(_mini_report(deps, overrides))
+    assert text.index("Overrides") < text.index("Missing binaries")
+    ov_table = text.split("Overrides")[1].split("Missing binaries")[0]
+    assert re.findall(r"^(\w+)/1\.0", ov_table, re.M) == ["alpha", "zeta"]
+    missing_table = text.split("Missing binaries")[1].split("Dependency hierarchy")[0]
+    assert re.findall(r"^(\w+)/1\.0", missing_table, re.M) == ["alpha", "zeta"]
 
 
 def test_missing_binaries(report):
