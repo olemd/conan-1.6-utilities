@@ -199,7 +199,7 @@ construction and parses those lines. A test pins the message format.
 Tagged releases with a built wheel, source distribution and `SHA256SUMS` are
 published on the
 [releases page](https://kode.naiv.no/olemd/conan-1.6-utilities/releases).
-Latest: [v0.2.0](https://kode.naiv.no/olemd/conan-1.6-utilities/releases/tag/v0.2.0).
+Latest: [v0.3.0](https://kode.naiv.no/olemd/conan-1.6-utilities/releases/tag/v0.3.0).
 
 Install a specific release with
 
