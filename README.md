@@ -11,11 +11,11 @@ Licensed under the [MIT License](LICENSE).
 
 | Tool | What it does |
 |------|--------------|
-| [`conandeps`](#conandeps) | Lists direct/indirect dependencies, checks which build types have binaries on a remote for your exact profile, and shows requirement overrides. |
+| [`conandeps`](#conandeps) | Lists direct/indirect dependencies, checks which build types have binaries on a remote for your exact profile, shows requirement overrides and reports packages with a newer version on the remote. |
 
 ## conandeps
 
-Given a `conanfile.py`, `conandeps` tells you three things in one report:
+Given a `conanfile.py`, `conandeps` tells you four things in one report:
 
 1. **What you depend on** – direct and indirect requirements, host and build
    context, as a table and as a tree.
@@ -31,6 +31,12 @@ Given a `conanfile.py`, `conandeps` tells you three things in one report:
    dependency declared. Each override is listed with who wanted what and who
    forced the change, and annotated on the exact edge of the dependency tree
    where it happened.
+4. **Which packages have a newer version on the remote** – versions are
+   ordered with Conan's own lenient comparison (which copes with dates and
+   most non-semver schemes), and the export timestamps of the current and
+   newest recipe are fetched and shown so that schemes with no meaningful
+   order (branch names, hashes) can still be judged by date. Informational
+   only: it never affects the exit code. Disable with `--no-check-updates`.
 
 ### Installation
 
@@ -58,7 +64,8 @@ if it requires authentication.
 
 ```
 conandeps CONANFILE [-r REMOTE] [-pr PROFILE] [-s KEY=VALUE] [-o PKG:KEY=VALUE]
-          [--build-types Release,Debug,RelWithDebInfo] [-u] [--html FILE] [-v]
+          [--build-types Release,Debug,RelWithDebInfo] [-u] [--no-check-updates]
+          [--html FILE] [-v]
 ```
 
 | Option | Meaning |
@@ -69,6 +76,7 @@ conandeps CONANFILE [-r REMOTE] [-pr PROFILE] [-s KEY=VALUE] [-o PKG:KEY=VALUE]
 | `-s`, `-o` | Extra settings / options, repeatable, same syntax as `conan install`. |
 | `--build-types` | Comma-separated build types to check. Default: `Release,Debug,RelWithDebInfo`. |
 | `-u`, `--update` | Ask the remote for newer recipes/binaries (`conan -u`). |
+| `--no-check-updates` | Skip the newer-version check (saves one recipe search per package, plus two manifest fetches per outdated one). |
 | `--html FILE` | Also write a self-contained HTML report (no scripts, no external assets). |
 | `-v` | Stream Conan's own output to stderr live. |
 | `-q` | Suppress the progress lines on stderr. |
@@ -80,7 +88,8 @@ gives a clean report.
 
 Exit status: `0` all binaries present, `1` at least one is missing, `2` Conan
 failed to build the graph (for example a version conflict). This makes it
-usable as a CI gate.
+usable as a CI gate. Newer versions found by the update check are
+informational and never change the exit status.
 
 ### Example
 
@@ -100,17 +109,23 @@ boost/1.8   MyDepA           host  myremote  myremote  myremote
             MyDepB -> Zigma
 Zigma/1.0   MyDepB           host  myremote  myremote  MISSING
 
+Overrides (1)
+
+package    wanted     forced to  by              kind
+-------------------------------------------------------------------------------------
+Zigma/1.0  boost/1.7  boost/1.8  your conanfile  implicit (newer requirement downstream)
+
 Missing binaries (1)
 
 package    build type      package_id                                reason
 ---------------------------------------------------------------------------------------
 Zigma/1.0  RelWithDebInfo  3f9c2b7d0e6a4f18c5d9a0b3e7f1c2d4a5b6e21a  no binary anywhere
 
-Overrides (1)
+Newer versions (1)
 
-package    wanted     forced to  by              kind
--------------------------------------------------------------------------------------
-Zigma/1.0  boost/1.7  boost/1.8  your conanfile  implicit (newer requirement downstream)
+package    newest     remote    exported    newest exported  note
+------------------------------------------------------------------------
+boost/1.8  boost/1.9  myremote  2026-03-02  2026-08-20       newer version
 
 Dependency hierarchy
 
@@ -133,8 +148,9 @@ to the package – `-` for a direct dependency, `MyDepB` for something MyDepB
 requires, `MyDepB -> Zigma` for something Zigma requires, and so on. A
 package required by several others gets one line per parent (boost above is
 pulled in by both MyDepA and Zigma), shortest path first. Rows are sorted
-direct-first, then by path, so a branch's transitive dependencies stay
-together; the dependency hierarchy section at the end shows the same
+on the via column and then the package name (direct dependencies first), so
+a branch's transitive dependencies stay together; the dependency hierarchy
+section at the end shows the same
 information as a tree, and every indirect node there also spells out the
 path of its branch so deep indentation never has to be counted.
 

@@ -75,6 +75,15 @@ Users install/upgrade on their own machine with
   Cache-only binaries are reported as `not available` and count as a
   problem (exit 1). Every available cell names the remote. The user rejected
   an opt-in flag for this – it is the tool's core question.
+- **The update check is version-first, timestamp-informed.** `_UpdateChecker`
+  lists each package's references with `search_recipes` (same user/channel
+  only), orders them with Conan's lenient `Version` (`_pick_latest`), and
+  fetches the recipe manifests' export timestamps of current+newest only when
+  they differ (two extra requests). Re-exporting refreshes a manifest's time,
+  so version order wins and the note column (`_update_note`) spells out any
+  disagreement; unreadable manifests render as `?`. On by default
+  (`--no-check-updates` disables, `Report.checked_updates`); never affects
+  the exit code. Do not fetch every candidate's manifest.
 - **Overrides are parsed from Conan's WARN output.** Conan 1 does not record
   overrides on the graph; `Requirements.update()` mutates `req.ref` in place
   and only emits `"<pkg>: requirement <old> overridden by <who> to <new>"`.

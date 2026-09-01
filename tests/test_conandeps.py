@@ -13,6 +13,9 @@ the usual settings but their build() does nothing, so no compiler is needed):
       `-- libqux/1.1        binaries: all three             <- implicit override
       `-- hdr/1.0           header-only (no settings), binary always exists
 
+libbar/1.2 is uploaded to the remote as well but required by nothing, so the
+update check can report libbar/1.1 as outdated.
+
 Everything runs in an isolated CONAN_USER_HOME so the developer's cache and
 remotes are never touched.
 """
@@ -182,6 +185,9 @@ def conan_env(tmp_path_factory):
     create("libdeep", "1.0")
     create("libbar", "1.0", requires=("libdeep/1.0",), build_types=("Release",))
     create("libbar", "1.1", requires=("libdeep/1.0",), build_types=("Release",))
+    # Never in the graph (nothing requires it): exists only so the update
+    # check can report libbar/1.1 as outdated.
+    create("libbar", "1.2", requires=("libdeep/1.0",), build_types=("Release",))
     create("libfoo", "1.0", requires=("libbar/1.0",))
     create("libqux", "1.0")
     create("libqux", "1.1")
@@ -273,9 +279,20 @@ def test_via_lists_every_parent_path():
     ]
 
 
-def _mini_report(deps, overrides=()):
+def _mini_report(deps, overrides=(), updates=(), checked_updates=True):
     """Hand-built single-build-type Report for renderer ordering tests."""
-    return conandeps.Report("conanfile.py", "test", {}, ["Release"], deps, list(overrides), {}, [])
+    return conandeps.Report(
+        "conanfile.py",
+        "test",
+        {},
+        ["Release"],
+        deps,
+        list(overrides),
+        {},
+        [],
+        list(updates),
+        checked_updates,
+    )
 
 
 def _mini_dep(ref, direct=False, paths=(), status="Remote"):
@@ -328,6 +345,66 @@ def test_overrides_before_missing_and_both_sorted():
     assert re.findall(r"^(\w+)/1\.0", ov_table, re.M) == ["alpha", "zeta"]
     missing_table = text.split("Missing binaries")[1].split("Dependency hierarchy")[0]
     assert re.findall(r"^(\w+)/1\.0", missing_table, re.M) == ["alpha", "zeta"]
+
+
+def test_pick_latest_orders_loosely():
+    """Conan's lenient Version copes with semver, dates and mixed schemes."""
+    pick = conandeps._pick_latest
+    assert pick("1.2.3", ["1.2.3", "1.10.0"]) == ("1.10.0", True)  # numeric, not lexicographic
+    assert pick("1.10.0", ["1.2.3", "1.10.0"]) is None  # current already newest
+    assert pick("2024.01", ["2024.01", "2024.2"]) == ("2024.2", True)
+    assert pick("cci.20230505", ["cci.20230505", "cci.20240101"]) == ("cci.20240101", True)
+    assert pick("1.2", ["1.2", "1.2.0"]) == ("1.2.0", False)  # equal -> timestamps decide
+    assert pick("master", ["master", "1.0"]) == ("1.0", True)  # unorderable scheme
+    assert pick("1.1", ["1.1"]) is None  # nothing else on the remote
+
+
+def test_update_note():
+    note = conandeps._update_note
+    assert note(True, 100, 200) == "newer version"
+    assert note(True, None, None) == "newer version"
+    assert note(True, 200, 100) == "newer version, but exported before current"
+    assert note(False, 100, 200) == "newer export date only"
+
+
+def test_updates_render_sorted_with_dates():
+    deps = {"a#host": _mini_dep("a/1.0", direct=True)}
+    ups = [
+        conandeps.Update("zeta/1.0", "zeta/2.0", "test", 1700000000, 1760000000, "newer version"),
+        conandeps.Update("alpha/1.0", "alpha/2.0", "test", None, None, "newer version"),
+    ]
+    text = conandeps.render_text(_mini_report(deps, updates=ups))
+    section = text.split("Newer versions (2)")[1].split("Dependency hierarchy")[0]
+    assert re.findall(r"^(\w+)/1\.0", section, re.M) == ["alpha", "zeta"]
+    assert "2023-11-14" in section and "2025-10-09" in section
+    assert "?" in section  # unreadable manifests render as ?, not a guess
+    page = conandeps.render_html(_mini_report(deps, updates=ups))
+    html_section = page.split("Newer versions (2)")[1]
+    assert re.findall(r"<td>(\w+)/1\.0</td>", html_section) == ["alpha", "zeta"]
+    assert '<span class="new">alpha/2.0</span>' in html_section
+
+
+def test_updates_not_checked_message():
+    deps = {"a#host": _mini_dep("a/1.0", direct=True)}
+    report = _mini_report(deps, checked_updates=False)
+    assert "not checked (--no-check-updates)" in conandeps.render_text(report)
+    assert "Not checked (--no-check-updates)." in conandeps.render_html(report)
+
+
+def test_newer_versions(report):
+    ups = {u.ref: u for u in report.updates}
+    # libbar/1.2 sits on the remote unused; everything else is at its newest.
+    assert set(ups) == {"libbar/1.1"}
+    u = ups["libbar/1.1"]
+    assert u.latest == "libbar/1.2" and u.remote == "test"
+    assert u.note == "newer version"
+    # Manifest timestamps come back for both refs, 1.2 exported after 1.1.
+    assert u.current_time and u.latest_time and u.latest_time >= u.current_time
+    text = conandeps.render_text(report)
+    assert re.search(r"libbar/1\.1\s+libbar/1\.2\s+test\s+\d{4}-\d{2}-\d{2}", text)
+    page = conandeps.render_html(report)
+    assert "<h2>Newer versions (1)</h2>" in page
+    assert '<span class="new">libbar/1.2</span>' in page
 
 
 def test_missing_binaries(report):
@@ -411,7 +488,7 @@ def test_text_and_html_render(report, tmp_path):
     assert "`-- " in text or "|-- " in text  # tree drawn
     page = conandeps.render_html(report)
     assert page.startswith("<!DOCTYPE html>") and 'class="missing"' in page
-    assert page.count("<table>") == 3  # dependencies, missing binaries, overrides
+    assert page.count("<table>") == 4  # dependencies, overrides, missing binaries, newer versions
     # The HTML tree carries the same tags as the text tree, coloured by kind.
     assert '[<span class="path">libfoo -&gt; libbar -&gt; libdeep</span>]' in page
     assert '<span class="new">overrides libbar/1.0 (explicit by your conanfile)</span>' in page
@@ -422,8 +499,10 @@ def test_text_and_html_render(report, tmp_path):
 
 def test_cli_exit_code(conan_env, tmp_path, capsys):
     out = tmp_path / "r.html"
-    rc = conandeps.main([conan_env["conanfile"], "-r", "test", "--html", str(out)])
+    args = [conan_env["conanfile"], "-r", "test", "--html", str(out), "--no-check-updates"]
+    rc = conandeps.main(args)
     assert rc == 1  # missing binaries -> non-zero so CI can fail on it
     assert out.exists()
     captured = capsys.readouterr()
     assert "conandeps report" in captured.out
+    assert "not checked (--no-check-updates)" in captured.out

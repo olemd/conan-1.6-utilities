@@ -14,7 +14,15 @@ Given a conanfile.py this tool:
   * reports every requirement override - explicit ``override=True`` ones as
     well as implicit ones where a downstream consumer simply asks for a newer
     version than a transitive dependency declared - as a hierarchy showing who
-    asked for what and which version won.
+    asked for what and which version won,
+  * checks whether the remote holds a newer version of each package (same
+    user/channel).  Versions are ordered with Conan's lenient ``Version``
+    (which copes with dates and most non-semver schemes); because some
+    schemes do not order at all, the export timestamps from the recipe
+    manifests of the current and newest reference are fetched too, shown in
+    the report, and used to catch a reference that is newer only by date.
+    Informational only - never affects the exit code.  Disable with
+    ``--no-check-updates``.
 
 How it works
 ------------
@@ -119,6 +127,18 @@ class Override:
 
 
 @dataclass
+class Update:
+    """A package for which the remote holds a newer reference."""
+
+    ref: str  # currently resolved reference
+    latest: str  # newest reference on the remote
+    remote: str  # remote that has ``latest``
+    current_time: Optional[int]  # export timestamp (epoch) of ``ref``'s recipe
+    latest_time: Optional[int]  # export timestamp of ``latest``'s recipe
+    note: str  # how "newer" was decided (see _update_note)
+
+
+@dataclass
 class Report:
     conanfile: str
     remote: Optional[str]
@@ -128,6 +148,8 @@ class Report:
     overrides: List[Override]
     ranges: Dict[str, str]  # resolved ref -> declared range/ref
     root_requires: List[str]
+    updates: List[Update] = field(default_factory=list)
+    checked_updates: bool = True  # False when --no-check-updates skipped the check
 
     def problems(self) -> List[Dep]:
         return [d for d in self.deps.values() if d.missing()]
@@ -256,6 +278,114 @@ class _RemoteIndex:
         return found
 
 
+def _pick_latest(current: str, versions: List[str]) -> Optional[Tuple[str, bool]]:
+    """Version-wise newest candidate, or None when nothing beats ``current``.
+
+    Uses Conan's lenient ``Version`` ordering, which copes with most schemes
+    (1.2.3, 2024.01, cci.20240101, ...).  Returns (latest, strictly_newer);
+    ``strictly_newer`` is False when the two merely differ textually (1.2 vs
+    1.2.0 compare equal) - the export timestamps decide such a tie.
+    """
+    from conans.model.version import Version
+
+    others = [v for v in versions if v != current]
+    if not others:
+        return None
+    latest = max(others, key=Version)
+    if Version(latest) < Version(current):
+        return None  # every other version on the remote is older
+    return latest, Version(latest) > Version(current)
+
+
+def _update_note(version_newer: bool, current_time: Optional[int], latest_time: Optional[int]):
+    """Say how "newer" was decided, so ambiguous version schemes stay honest.
+
+    A re-export refreshes a recipe's manifest timestamp, so neither signal is
+    trusted blindly: a version-wise newer reference wins, but a timestamp that
+    contradicts it is called out for the reader to judge.
+    """
+    if not version_newer:
+        return "newer export date only"
+    if current_time is not None and latest_time is not None and latest_time < current_time:
+        return "newer version, but exported before current"
+    return "newer version"
+
+
+class _UpdateChecker:
+    """Finds newer references of each resolved package on the remote.
+
+    One recipe search per package lists every reference; candidates sharing
+    the current reference's user/channel are ordered by ``_pick_latest``.
+    When a candidate differs, the recipe manifests of the current and newest
+    reference are fetched (two extra requests) for their export timestamps -
+    shown in the report and used by ``_update_note``.  A manifest that cannot
+    be fetched renders as "?", never as a guess.
+    """
+
+    def __init__(self, api, remote: Optional[str], quiet: bool):
+        self._api = api
+        self._remote = remote or "all"
+        self._quiet = quiet
+
+    def check(self, refs: List[str]) -> List[Update]:
+        return [u for u in (self._check_one(r) for r in refs) if u]
+
+    def _check_one(self, ref: str) -> Optional[Update]:
+        from conans.errors import ConanException
+        from conans.model.ref import ConanFileReference
+
+        current = ConanFileReference.loads(ref)
+        # version -> (full ref, remote name); first remote to report a version wins.
+        candidates: Dict[str, Tuple[str, str]] = {}
+        try:
+            info = self._api.search_recipes("%s/*" % current.name, remote_name=self._remote)
+        except ConanException as exc:
+            _progress(self._quiet, "WARN: version search for %s failed: %s" % (ref, exc))
+            return None
+        for remote_info in info.get("results", []):
+            for item in remote_info.get("items", []):
+                try:
+                    found = ConanFileReference.loads(item["recipe"]["id"])
+                except ConanException:
+                    continue
+                same = (found.name, found.user, found.channel) == (
+                    current.name,
+                    current.user,
+                    current.channel,
+                )
+                if same:
+                    candidates.setdefault(str(found.version), (str(found), remote_info["remote"]))
+        picked = _pick_latest(str(current.version), list(candidates))
+        if not picked:
+            return None
+        latest_version, version_newer = picked
+        latest_ref, latest_remote = candidates[latest_version]
+        mine = candidates.get(str(current.version))
+        current_time = self._export_time(ref, mine[1]) if mine else None
+        latest_time = self._export_time(latest_ref, latest_remote)
+        newer_by_time = (
+            current_time is not None and latest_time is not None and latest_time > current_time
+        )
+        if not version_newer and not newer_by_time:
+            return None
+        note = _update_note(version_newer, current_time, latest_time)
+        return Update(ref, latest_ref, latest_remote, current_time, latest_time, note)
+
+    def _export_time(self, ref: str, remote_name: str) -> Optional[int]:
+        """Export timestamp from the recipe's conanmanifest.txt, or None."""
+        from conans.errors import ConanException
+        from conans.model.ref import ConanFileReference
+
+        try:
+            remote = self._api.app.cache.registry.load_remotes()[remote_name]
+            manifest, _ = self._api.app.remote_manager.get_recipe_manifest(
+                ConanFileReference.loads(ref), remote
+            )
+            return int(manifest.time)
+        except (ConanException, KeyError, TypeError, ValueError):
+            return None
+
+
 def _paths(root) -> Dict[str, List[str]]:
     """Breadth-first shortest path (list of package names) from the root to every node.
 
@@ -351,6 +481,7 @@ def build_report(
     update: bool,
     verbose: bool = False,
     quiet: bool = False,
+    check_updates: bool = True,
 ) -> Report:
     log = _Tee(echo=verbose)
     _progress(quiet, "loading Conan API")
@@ -397,6 +528,12 @@ def build_report(
     overrides = _parse_overrides(log.getvalue(), explicit)
     _progress(quiet, "%d overrides detected" % len(overrides))
 
+    updates: List[Update] = []
+    if check_updates:
+        _progress(quiet, "checking for newer versions on %s ..." % (remote or "all remotes"))
+        updates = _UpdateChecker(api, remote, quiet).check(sorted({d.ref for d in deps.values()}))
+        _progress(quiet, "%d packages have a newer version" % len(updates))
+
     # Direct dependencies first, then by increasing level of indirection,
     # alphabetically within a level.  Build-context nodes sort after host.
     ordered = sorted(
@@ -417,6 +554,8 @@ def build_report(
         overrides,
         ranges,
         root_requires,
+        updates,
+        check_updates,
     )
 
 
@@ -576,6 +715,11 @@ def _override_kind(o: Override) -> str:
     return "explicit (override=True)" if o.explicit else "implicit (newer requirement downstream)"
 
 
+def _date(ts: Optional[int]) -> str:
+    """Export timestamp as a UTC date, '?' when the manifest could not be read."""
+    return time.strftime("%Y-%m-%d", time.gmtime(ts)) if ts else "?"
+
+
 def _via(dep: Dep, arrow: str = " -> ", newline: str = "\n") -> str:
     """How the package is reached: '-' for direct, otherwise one line per path.
 
@@ -599,6 +743,10 @@ def _dep_key(dep: Dep):
 
 def _override_key(o: Override):
     return (o.package.lower(), o.old.lower())
+
+
+def _update_key(u: Update):
+    return u.ref.lower()
 
 
 def render_text(report: Report, color: bool = False) -> str:
@@ -661,6 +809,24 @@ def render_text(report: Report, color: bool = False) -> str:
         out.extend(_table(["package", "build type", "package_id", "reason"], rows, pal))
     else:
         w(pal.ok("All packages have binaries on the remote for: " + ", ".join(report.build_types)))
+    w("")
+
+    # ---- newer versions --------------------------------------------------
+    # Informational only: a newer reference existing does not fail the run.
+    w(pal.bold("Newer versions (%d)" % len(report.updates)))
+    w("")
+    if report.updates:
+        rows = [
+            [u.ref, pal.warn(u.latest), u.remote]
+            + [_date(u.current_time), _date(u.latest_time), u.note]
+            for u in sorted(report.updates, key=_update_key)
+        ]
+        headers = ["package", "newest", "remote", "exported", "newest exported", "note"]
+        out.extend(_table(headers, rows, pal))
+    elif not report.checked_updates:
+        w("not checked (--no-check-updates)")
+    else:
+        w(pal.ok("every package is the newest version on the remote"))
     w("")
 
     # ---- hierarchy -------------------------------------------------------
@@ -769,6 +935,26 @@ def render_html(report: Report) -> str:
             % e(", ".join(report.build_types))
         )
 
+    # ---- newer versions (informational, never affects the exit code) -----
+    w("<h2>Newer versions (%d)</h2>" % len(report.updates))
+    if report.updates:
+        rows = [
+            [
+                e(u.ref),
+                '<span class="new">%s</span>' % e(u.latest),
+                e(u.remote),
+                e(_date(u.current_time)),
+                e(_date(u.latest_time)),
+                e(u.note),
+            ]
+            for u in sorted(report.updates, key=_update_key)
+        ]
+        w(_html_table(["package", "newest", "remote", "exported", "newest exported", "note"], rows))
+    elif not report.checked_updates:
+        w("<p>Not checked (--no-check-updates).</p>")
+    else:
+        w('<p class="ok">Every package is the newest version on the remote.</p>')
+
     # Tree text is escaped per fragment so the tag spans survive; the tag
     # classes reuse the table's colours (path = dim, override = yellow, ...).
     tag_class = {"path": "path", "override": "new", "missing": "missing", "range": "na"}
@@ -791,7 +977,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     p = argparse.ArgumentParser(
         prog="conandeps",
         description="List Conan dependencies, check Release/Debug/RelWithDebInfo binary "
-        "availability and show requirement overrides.",
+        "availability, show requirement overrides and report newer versions on the remote.",
     )
     p.add_argument("conanfile", help="path to conanfile.py (or a directory containing one)")
     p.add_argument(
@@ -831,6 +1017,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         action="store_true",
         help="check the remote for newer recipes/binaries (conan -u)",
     )
+    p.add_argument(
+        "--no-check-updates",
+        action="store_true",
+        help="do not check the remote for newer versions of each package",
+    )
     p.add_argument("--html", metavar="FILE", help="also write an HTML report to FILE")
     p.add_argument(
         "-v", "--verbose", action="store_true", help="stream Conan's own output to stderr live"
@@ -859,6 +1050,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             args.update,
             args.verbose,
             args.quiet,
+            check_updates=not args.no_check_updates,
         )
     except Exception as exc:  # ConanException and friends
         sys.stderr.write("conandeps: error: %s\n" % exc)
