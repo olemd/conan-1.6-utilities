@@ -252,10 +252,6 @@ def test_sorted_by_path(report):
     # it is direct, so the via column just says "-".
     assert sorted(report.deps["libqux#host"].parents) == ["libbaz", "your conanfile"]
     assert conandeps._via(report.deps["libqux#host"]) == "-"
-    text = conandeps.render_text(report)
-    assert re.search(r"hdr/1\.0\s+-\s+host", text)
-    assert re.search(r"libbar/1\.1\s+libfoo\s+host", text)
-    assert re.search(r"libdeep/1\.0\s+libfoo -> libbar\s+host", text)
     page = conandeps.render_html(report)
     assert "<th>via</th>" in page
     assert "<td>libdeep/1.0</td><td>libfoo \u2192 libbar</td><td>host</td>" in page
@@ -307,7 +303,7 @@ def _mini_dep(ref, direct=False, paths=(), status="Remote", requires=(), fallbac
 
 
 def test_dependency_rows_sort_by_via_then_name():
-    """Text and HTML dependency rows sort on the via column, then package name.
+    """The HTML dependency rows sort on the via column, then package name.
 
     Unlike the report's depth-first order, this groups each chain: the depth-3
     package via "apple -> beta" comes before the depth-2 one via "zebra".
@@ -322,12 +318,10 @@ def test_dependency_rows_sort_by_via_then_name():
     expected = ["zdirect", "beta", "deep", "alpha"]
     page = conandeps.render_html(_mini_report(deps))
     assert re.findall(r"<td>(\w+)/1\.0</td>", page.split("<h2>Overrides")[0]) == expected
-    text = conandeps.render_text(_mini_report(deps))
-    assert re.findall(r"^(\w+)/1\.0", text.split("Overrides")[0], re.M) == expected
 
 
 def test_overrides_before_missing_and_both_sorted():
-    """Overrides section precedes missing binaries; both sort alphabetically."""
+    """HTML overrides section precedes missing binaries; both sort alphabetically."""
     deps = {
         "zeta#host": _mini_dep("zeta/1.0", direct=True, status="Missing"),
         "alpha#host": _mini_dep("alpha/1.0", direct=True, status="Missing"),
@@ -343,12 +337,9 @@ def test_overrides_before_missing_and_both_sorted():
     missing_table = page.split("<h2>Missing binaries")[1].split("<h2>")[0]
     assert re.findall(r"<td>(\w+)/1\.0</td>", missing_table) == ["alpha", "zeta"]
 
+    # The text report keeps only the missing binaries, in the same order.
     text = conandeps.render_text(_mini_report(deps, overrides))
-    assert text.index("Overrides") < text.index("Missing binaries")
-    ov_table = text.split("Overrides")[1].split("Missing binaries")[0]
-    assert re.findall(r"^(\w+)/1\.0", ov_table, re.M) == ["alpha", "zeta"]
-    missing_table = text.split("Missing binaries")[1].split("Dependency hierarchy")[0]
-    assert re.findall(r"^(\w+)/1\.0", missing_table, re.M) == ["alpha", "zeta"]
+    assert re.findall(r"^(\w+)/1\.0", text.split("Missing binaries")[1], re.M) == ["alpha", "zeta"]
 
 
 def test_pick_latest_orders_loosely():
@@ -377,19 +368,16 @@ def test_updates_render_sorted_with_dates():
         conandeps.Update("zeta/1.0", "zeta/2.0", "test", 1700000000, 1760000000, "newer version"),
         conandeps.Update("alpha/1.0", "alpha/2.0", "test", None, None, "newer version"),
     ]
-    text = conandeps.render_text(_mini_report(deps, updates=ups))
-    section = text.split("Newer versions (2)")[1].split("Dependency hierarchy")[0]
-    assert re.findall(r"^(\w+)/1\.0", section, re.M) == ["alpha", "zeta"]
-    assert "2023-11-14" in section and "2025-10-09" in section
-    assert "?" in section  # unreadable manifests render as ?, not a guess
     page = conandeps.render_html(_mini_report(deps, updates=ups))
-    html_section = page.split("Newer versions (2)")[1]
-    assert re.findall(r"<td>(\w+)/1\.0</td>", html_section) == ["alpha", "zeta"]
-    assert '<span class="new">alpha/2.0</span>' in html_section
+    section = page.split("Newer versions (2)")[1]
+    assert re.findall(r"<td>(\w+)/1\.0</td>", section) == ["alpha", "zeta"]
+    assert '<span class="new">alpha/2.0</span>' in section
+    assert "2023-11-14" in section and "2025-10-09" in section
+    assert "<td>?</td>" in section  # unreadable manifests render as ?, not a guess
 
 
 def test_dependency_table_shows_newest_version():
-    """Both dependency tables join the update check onto every package row.
+    """The dependency table joins the update check onto every package row.
 
     The cell carries the version only - the update checker keeps name, user
     and channel, so that is the whole difference from the package column -
@@ -406,20 +394,14 @@ def test_dependency_table_shows_newest_version():
     assert '<td><span class="new" title="newer version">2.0</span></td>' in table
     assert '<td><span class="ok">up to date</span></td>' in table
 
-    text = conandeps.render_text(_mini_report(deps, updates=ups)).split("Overrides")[0]
-    assert re.search(r"package\s+via\s+ctx\s+newest\s+Release", text)
-    assert re.search(r"^a/1\.0\s+-\s+host\s+2\.0\s", text, re.M)
-    assert re.search(r"^b/1\.0\s+-\s+host\s+up to date\s", text, re.M)
-
     plain = _mini_report(deps, checked_updates=False)
     assert "<th>newest</th>" not in conandeps.render_html(plain).split("<h2>Overrides")[0]
-    assert "newest" not in conandeps.render_text(plain).split("Overrides")[0]
 
 
 def test_updates_not_checked_message():
     deps = {"a#host": _mini_dep("a/1.0", direct=True)}
     report = _mini_report(deps, checked_updates=False)
-    assert "not checked (--no-check-updates)" in conandeps.render_text(report)
+    assert "newer versions not checked" in conandeps.render_text(report)  # summary line
     assert "Not checked (--no-check-updates)." in conandeps.render_html(report)
 
 
@@ -453,10 +435,6 @@ def test_update_order_waves_consumers_after_requirements():
     assert steps[-1].action == "bump requirements"
     assert steps[-1].blocked_by == ["MyDepA", "MyDepB"]  # direct requirements only
 
-    text = conandeps.render_text(_mini_report(deps, updates=ups))
-    section = text.split("Update order (4 waves)")[1].split("Dependency hierarchy")[0]
-    assert re.search(r"^1\s+boost/1\.8\s+update to 1\.9\s+-$", section, re.M)
-    assert re.search(r"^4\s+conanfile\.py\s+bump requirements\s+MyDepA, MyDepB$", section, re.M)
     page = conandeps.render_html(_mini_report(deps, updates=ups))
     html_section = page.split("<h2>Update order (4 waves)</h2>")[1]
     assert "<td>1</td><td>boost/1.8</td>" in html_section
@@ -467,11 +445,9 @@ def test_update_order_empty_when_everything_is_newest():
     """No updates means no plan; --no-check-updates says so instead of "none"."""
     deps = {"a#host": _mini_dep("a/1.0", direct=True)}
     assert conandeps._update_order(_mini_report(deps)) == []
-    assert "nothing to update" in conandeps.render_text(_mini_report(deps))
     assert "Nothing to update." in conandeps.render_html(_mini_report(deps))
-    unchecked = _mini_report(deps, checked_updates=False)
-    order = conandeps.render_text(unchecked).split("Update order (0 waves)")[1]
-    assert "not checked (--no-check-updates)" in order
+    unchecked = conandeps.render_html(_mini_report(deps, checked_updates=False))
+    assert "Not checked (--no-check-updates)." in unchecked.split("Update order (0 waves)")[1]
 
 
 def test_update_order_from_the_real_graph(report):
@@ -494,10 +470,9 @@ def test_newer_versions(report):
     assert u.note == "newer version"
     # Manifest timestamps come back for both refs, 1.2 exported after 1.1.
     assert u.current_time and u.latest_time and u.latest_time >= u.current_time
-    text = conandeps.render_text(report)
-    assert re.search(r"libbar/1\.1\s+libbar/1\.2\s+test\s+\d{4}-\d{2}-\d{2}", text)
     page = conandeps.render_html(report)
     assert "<h2>Newer versions (1)</h2>" in page
+    assert re.search(r"<td>libbar/1\.1</td>.*?<td>test</td><td>\d{4}-\d{2}-\d{2}</td>", page)
     assert '<span class="new">libbar/1.2</span>' in page
 
 
@@ -542,14 +517,13 @@ def test_fallback_is_spelled_out_in_both_renderers():
     text = conandeps.render_text(report)
     # Header labels line up: "remote   :", "profile  :", "fallbacks:".
     assert "\nfallbacks: Release: icu -> Debug, zlib -> Debug\n" in text
-    assert re.search(r"^zlib/1\.2\s+-\s+host\s+up to date\s+test \(via Debug\)$", text, re.M)
     # A fallback without a binary either is still missing, and the row says
     # which build type was actually looked for.
-    assert re.search(r"^icu/70\s+Release \(via Debug\)\s+f+\s+no binary anywhere$", text, re.M)
+    assert re.search(r"^icu/70\s+Release \(via Debug\)\s+no binary anywhere$", text, re.M)
 
     page = conandeps.render_html(report)
     assert "<b>fallbacks:</b> Release: icu -&gt; Debug, zlib -&gt; Debug" in page
-    assert ">test (via Debug)</span>" in page
+    assert ">test (via Debug)</span>" in page  # the dependency table cell
     assert "<td>Release (via Debug)</td>" in page
 
 
@@ -583,9 +557,9 @@ def test_fallback_build_types(conan_env, tmp_path):
     assert report.problems() == []
     assert not report.deps["libfoo#host"].fallbacks  # only the listed package moves
 
-    text = conandeps.render_text(report)
-    assert re.search(r"^libbar/1\.1\s+libfoo\s+host\s+test\s+test \(via Release\)", text, re.M)
-    assert "All packages have binaries on the remote" in text
+    assert "All packages have binaries on the remote" in conandeps.render_text(report)
+    page = conandeps.render_html(report)
+    assert page.count(">test (via Release)</span>") == 2  # Debug and RelWithDebInfo
 
     rc = conandeps.main(
         [conan_env["conanfile"], "-r", "test", "--no-check-updates", "--fallbacks", str(ini), "-q"]
@@ -633,38 +607,41 @@ def test_overrides(report):
     }
 
 
-def test_text_and_html_render(report, tmp_path):
+def test_text_render_is_a_summary(report):
+    """The terminal report is the header, the counts and the missing binaries.
+
+    Everything the HTML report carries - the dependency table, the overrides,
+    the newer versions, the update order and the tree - is deliberately absent
+    here, so the text stays scannable in a CI log.
+    """
     text = conandeps.render_text(report)
-    assert "libbar/1.1" in text and "MISSING" in text
-    table = text.split("Missing binaries")[0]
-    assert table.count("test") >= 5 * 3 - 2  # every available cell names the remote
+    assert text.startswith("conandeps report for ")
+    assert "\nremote   : test\n" in text
+    assert "\n6 dependencies, 2 overrides, 1 newer version\n" in text
+    assert "Missing binaries (2)" in text
+    assert re.search(r"^libbar/1\.1\s+Debug\s+no binary anywhere$", text, re.M)
+    for section in ("Dependencies (", "Overrides (", "Newer versions (", "Update order ("):
+        assert section not in text
+    assert "Dependency hierarchy" not in text and "`-- " not in text
     assert "\033[" not in text  # no ANSI codes unless asked for
-    # Missing binaries and overrides are tables with a header row.
-    assert "package     build type      package_id" in text
-    assert re.search(r"libbar/1\.1\s+Debug\s+[0-9a-f]{40}\s+no binary anywhere", text)
-    assert "package     wanted      forced to   by              kind" in text
-    assert "libfoo/1.0  libbar/1.0  libbar/1.1  your conanfile  explicit (override=True)" in text
-    assert "overrides libbar/1.0 (explicit" in text  # tree edge annotation
-    # Tree lines carry the full path of their branch; direct nodes do not.
-    tree = text.split("Dependency hierarchy")[1]
-    assert re.search(r"`-- libdeep/1\.0  \[libfoo -> libbar -> libdeep\]", tree)
-    assert re.search(r"\|-- libfoo/1\.0\n", tree)
 
     coloured = conandeps.render_text(report, color=True)
-    assert "\033[1;31mMISSING\033[0m" in coloured and "\033[32mtest\033[0m" in coloured
-    # Tree tags: path dim, override yellow, MISSING bold red.
-    assert "\033[2mlibfoo -> libbar -> libdeep\033[0m" in coloured
-    assert "\033[33moverrides libbar/1.0 (explicit by your conanfile)\033[0m" in coloured
-    assert "\033[1;31mMISSING: Debug,RelWithDebInfo\033[0m" in coloured
+    assert "\033[1;31mno binary anywhere\033[0m" in coloured
     # Colour codes must not break column alignment: same visible layout.
-    strip = conandeps._ANSI_RE.sub
-    assert strip("", coloured) == text
-    assert "`-- " in text or "|-- " in text  # tree drawn
+    assert conandeps._ANSI_RE.sub("", coloured) == text
+
+
+def test_html_render(report):
     page = conandeps.render_html(report)
+    assert page.count('">test</span>') == 16  # every available cell names the remote
+    # Overrides table: wanted version struck through, forced version marked.
+    assert '<td>libfoo/1.0</td><td><span class="old">libbar/1.0</span></td>' in page
+    assert "explicit (override=True)" in page
+    assert re.search(r"<td>libbar/1\.1</td><td>Debug</td><td><code>[0-9a-f]{40}</code>", page)
     assert page.startswith("<!DOCTYPE html>") and 'class="missing"' in page
     # dependencies, overrides, missing binaries, newer versions, update order
     assert page.count("<table>") == 5
-    # The HTML tree carries the same tags as the text tree, coloured by kind.
+    # The tree carries a typed tag per annotation, coloured by kind.
     assert '[<span class="path">libfoo -&gt; libbar -&gt; libdeep</span>]' in page
     assert '<span class="new">overrides libbar/1.0 (explicit by your conanfile)</span>' in page
     assert '<span class="missing">MISSING: Debug,RelWithDebInfo</span>' in page
@@ -680,4 +657,9 @@ def test_cli_exit_code(conan_env, tmp_path, capsys):
     assert out.exists()
     captured = capsys.readouterr()
     assert "conandeps report" in captured.out
-    assert "not checked (--no-check-updates)" in captured.out
+    assert "newer versions not checked" in captured.out
+    assert "HTML report written to" in captured.out
+
+    # Without --html the summary says where the rest of the report is.
+    assert conandeps.main([conan_env["conanfile"], "-r", "test", "--no-check-updates", "-q"]) == 1
+    assert "Full report: --html FILE" in capsys.readouterr().out

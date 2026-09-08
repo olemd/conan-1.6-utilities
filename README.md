@@ -18,7 +18,7 @@ Licensed under the [MIT License](LICENSE).
 Given a `conanfile.py`, `conandeps` tells you four things in one report:
 
 1. **What you depend on** – direct and indirect requirements, host and build
-   context, as a table and as a tree.
+   context, as a table and as a tree in the HTML report.
 2. **Which binaries are missing** – for every dependency, whether a package
    exists *on the remote* for **Release, Debug and RelWithDebInfo** (or any
    list you choose), evaluated for *your exact profile* (compiler, version,
@@ -95,79 +95,69 @@ informational and never change the exit status.
 ### Example
 
 ```
-$ conandeps MyProject/conanfile.py -r myremote
+$ conandeps MyProject/conanfile.py -r myremote --html report.html
 conandeps report for MyProject/conanfile.py
 remote   : myremote
 profile  : arch=x86_64, compiler=gcc, compiler.libcxx=libstdc++11, compiler.version=14, os=Linux
 
-Dependencies (4) and binary availability
+12 dependencies, 1 override, 1 newer version
 
-package     via              ctx   newest      Release   Debug     RelWithDebInfo
----------------------------------------------------------------------------------
-MyDepA/1.0  -                host  up to date  myremote  myremote  myremote
-MyDepB/1.0  -                host  up to date  myremote  myremote  myremote
-boost/1.8   MyDepA           host  1.9         myremote  myremote  myremote
-            MyDepB -> Zigma
-Zigma/1.0   MyDepB           host  up to date  myremote  myremote  MISSING
+Missing binaries (2)
 
-Overrides (1)
+package    build type      reason
+--------------------------------------------
+Zigma/1.0  Debug           local cache only
+Zigma/1.0  RelWithDebInfo  no binary anywhere
 
-package    wanted     forced to  by              kind
--------------------------------------------------------------------------------------
-Zigma/1.0  boost/1.7  boost/1.8  your conanfile  implicit (newer requirement downstream)
-
-Missing binaries (1)
-
-package    build type      package_id                                reason
----------------------------------------------------------------------------------------
-Zigma/1.0  RelWithDebInfo  3f9c2b7d0e6a4f18c5d9a0b3e7f1c2d4a5b6e21a  no binary anywhere
-
-Newer versions (1)
-
-package    newest     remote    exported    newest exported  note
-------------------------------------------------------------------------
-boost/1.8  boost/1.9  myremote  2026-03-02  2026-08-20       newer version
-
-Update order (4 waves)
-
-wave  package                 action             blocked by
----------------------------------------------------------------
-1     boost/1.8               update to 1.9      -
-2     MyDepA/1.0              re-release         boost
-2     Zigma/1.0               re-release         boost
-3     MyDepB/1.0              re-release         Zigma
-4     MyProject/conanfile.py  bump requirements  MyDepA, MyDepB
-
-Dependency hierarchy
-
-MyProject/conanfile.py
-|-- MyDepA/1.0
-|   `-- boost/1.8  [MyDepA -> boost]
-`-- MyDepB/1.0
-    `-- Zigma/1.0  [MyDepB -> Zigma; MISSING: RelWithDebInfo]
-        `-- boost/1.8  [MyDepB -> Zigma -> boost; overrides boost/1.7 (implicit by your conanfile)]
+HTML report written to report.html
 ```
 
-On a terminal the tables are coloured (green = on the remote, red = missing,
-yellow = cache-only / overridden version); `--color never` or the `NO_COLOR`
-environment variable turns that off, and redirecting stdout to a file never
-produces colour codes unless you pass `--color always`. The HTML report uses
-the same colour coding.
+That is the whole terminal report: the header, one line of counts, and what
+is broken. It matches the exit status, so a CI log shows the reason for a
+failure without scrolling. Without `--html` the last line is instead
+`Full report: --html FILE`. The reason column is coloured on a terminal (red
+= no binary anywhere, yellow = local cache only); `--color never` or the
+`NO_COLOR` environment variable turns that off, and redirecting stdout to a
+file never produces colour codes unless you pass `--color always`.
 
-Reading the table: the `via` column is the shortest path from your conanfile
-to the package – `-` for a direct dependency, `MyDepB` for something MyDepB
-requires, `MyDepB -> Zigma` for something Zigma requires, and so on. A
-package required by several others gets one line per parent (boost above is
-pulled in by both MyDepA and Zigma), shortest path first. The `newest`
-column gives the newest version of that package on the remote, or `up to
-date` when the resolved one is already the newest; `--no-check-updates`
-removes the column along with the `Newer versions` section. Rows are sorted
-on the via column and then the package name (direct dependencies first), so
-a branch's transitive dependencies stay together; the dependency hierarchy
-section at the end shows the same
-information as a tree, and every indirect node there also spells out the
-path of its branch so deep indentation never has to be counted.
+### The HTML report
 
+`--html FILE` writes the report proper: one self-contained page, no scripts
+and no external assets, so it can be attached to a build or mailed to a
+colleague. It follows the same colour coding, adapts to a dark theme, and has
+five tables plus the dependency tree.
+
+**Dependencies and binary availability**, one row per package:
+
+| package | via | context | newest | Release | Debug | RelWithDebInfo |
+|---------|-----|---------|--------|---------|-------|----------------|
+| MyDepA/1.0 | – | host | up to date | myremote | myremote | myremote |
+| MyDepB/1.0 | – | host | up to date | myremote | myremote | myremote |
+| cmake/3.29 | – | build | up to date | myremote | myremote | myremote |
+| boost/1.8 | MyDepA<br>MyDepB → Zigma | host | 1.9 | myremote | myremote | myremote |
+| Zigma/1.0 | MyDepB | host | up to date | myremote | myremote | MISSING |
+
+The `via` column is the shortest path from your conanfile to the package –
+`–` for a direct dependency, `MyDepB` for something MyDepB requires,
+`MyDepB → Zigma` for something Zigma requires, and so on. A package required
+by several others gets one line per parent (boost above is pulled in by both
+MyDepA and Zigma), shortest path first. Rows are sorted on the via column and
+then the package name, direct dependencies first, so a branch's transitive
+dependencies stay together.
+
+The `context` column is Conan's host/build split. `host` means the package is
+part of what you are building: it is compiled for your target platform and
+linked into your binaries. `build` means it is a **build requirement**, a tool
+that merely runs during the build (cmake, a code generator, a compiler
+wrapper), so it is built for the machine doing the building, not for the
+target. The distinction matters when you cross-compile, where the two are
+different platforms and the same package can appear in both contexts.
+
+The `newest` column gives the newest version of that package on the remote, or
+`up to date` when the resolved one is already the newest; `--no-check-updates`
+removes the column along with the `Newer versions` section.
+
+Each build-type cell is one of:
 
 * a remote name (e.g. `myremote`) – the remote has a binary for the package_id your
   profile produces. Hover a cell in the HTML report to see the package_id.
@@ -178,10 +168,25 @@ path of its branch so deep indentation never has to be counted.
 * `myremote (via Release)` – found, but under a fallback build type; see
   [Build type fallbacks](#build-type-fallbacks).
 * `-` – not applicable (Conan marked the node `Skip` or `Editable`).
-* Header-only packages show `ok` everywhere: their package_id ignores
-  `build_type`.
+* Header-only packages show the remote in every column: their package_id
+  ignores `build_type`, so one binary serves all of them.
 
-The `Update order` section answers "what do I bump first?". A package is in
+The **dependency hierarchy** at the end of the page shows the same graph as a
+tree, where every indirect node also spells out the path of its branch, so
+deep indentation never has to be counted:
+
+```
+MyProject/conanfile.py
+|-- MyDepA/1.0
+|   `-- boost/1.8  [MyDepA -> boost]
+`-- MyDepB/1.0
+    `-- Zigma/1.0  [MyDepB -> Zigma; MISSING: RelWithDebInfo]
+        `-- boost/1.8  [MyDepB -> Zigma -> boost; overrides boost/1.7 (implicit by your conanfile)]
+```
+
+The **overrides** and **newer versions** tables list what was rewritten and
+what has a newer reference on the remote. The `Update order` section answers
+"what do I bump first?". A package is in
 the plan when the remote has a newer version of it, and also when one of its
 requirements has one: MyDepA and Zigma above are at their newest version, but
 they still have to be re-released against boost/1.9 before your project can

@@ -52,6 +52,10 @@ Conan 1.x does not record overrides on the graph; the only trace is a warning
 emitted by ``Requirements.update()``.  We therefore capture Conan's output
 stream while the graph is built and parse those lines.
 
+The terminal output is a summary - the header, one line of counts and the
+missing binaries.  The full report (dependency table, overrides, newer
+versions, update order, tree) is the HTML one written by ``--html``.
+
 Targets Conan 1.66.  Uses only the standard library plus the Conan API.
 """
 
@@ -717,16 +721,6 @@ def _tree_rows(report: Report) -> List[_TreeLine]:
     return rows
 
 
-def _tree_lines(report: Report, fmt_tag=None) -> List[str]:
-    """Flatten tree rows to lines; ``fmt_tag(kind, text)`` decorates each tag."""
-    fmt_tag = fmt_tag or (lambda _kind, text: text)
-    lines = []
-    for head, tags, tail in _tree_rows(report):
-        rendered = "  [" + "; ".join(fmt_tag(k, t) for k, t in tags) + "]" if tags else ""
-        lines.append(head + rendered + tail)
-    return lines
-
-
 def _update_order(report: Report) -> List[Step]:
     """The order in which packages must be updated for the root to be newest.
 
@@ -942,7 +936,31 @@ def _update_key(u: Update):
     return u.ref.lower()
 
 
+def _plural(n: int, singular: str, plural: Optional[str] = None) -> str:
+    return "%d %s" % (n, singular if n == 1 else (plural or singular + "s"))
+
+
+def _summary(report: Report) -> str:
+    """The one-line count under the text report's header."""
+    parts = [
+        _plural(len(report.deps), "dependency", "dependencies"),
+        _plural(len(report.overrides), "override"),
+        _plural(len(report.updates), "newer version")
+        if report.checked_updates
+        else "newer versions not checked",
+    ]
+    return ", ".join(parts)
+
+
 def render_text(report: Report, color: bool = False) -> str:
+    """The terminal report: the header, a one-line count and the problems.
+
+    Everything else - the dependency table, the overrides, the newer
+    versions, the update order and the tree - is in the HTML report, which is
+    where the detail is meant to be read.  What is left is short enough to
+    scan in a CI log, where the only question is what is missing, and it
+    matches the exit code exactly.
+    """
     pal = _Palette(color)
     out: List[str] = []
     w = out.append
@@ -953,111 +971,25 @@ def render_text(report: Report, color: bool = False) -> str:
     if report.fallbacks:
         w("fallbacks: " + _fallback_summary(report.fallbacks))
     w("")
-
-    # ---- dependencies ----------------------------------------------------
-    w(pal.bold("Dependencies (%d) and binary availability" % len(report.deps)))
-    w("")
-    # Same "newest" column as the HTML table, from the same data; dropped
-    # entirely when --no-check-updates skipped the search.
-    newest = {u.ref: u for u in report.updates}
-    rows = []
-    for dep in sorted(report.deps.values(), key=_dep_key):
-        row = [dep.ref, _via(dep), dep.context]
-        if report.checked_updates:
-            u = newest.get(dep.ref)
-            row.append(pal.warn(_newest(u)) if u else pal.ok(_newest(u)))
-        row += [_cell(*dep.binaries[bt], pal, dep.fallbacks.get(bt)) for bt in report.build_types]
-        rows.append(row)
-    headers = ["package", "via", "ctx"]
-    if report.checked_updates:
-        headers.append("newest")
-    out.extend(_table(headers + list(report.build_types), rows, pal))
+    w(_summary(report))
     w("")
 
-    # ---- overrides -------------------------------------------------------
-    # Overrides come before missing binaries: an override is often the
-    # *cause* of a missing binary, so the reader meets it first.
-    w(pal.bold("Overrides (%d)" % len(report.overrides)))
-    w("")
-    if report.overrides:
-        rows = [
-            [
-                o.package,
-                pal.dim(o.old),
-                pal.warn(o.new),
-                o.by,
-                pal.bold(_override_kind(o)) if o.explicit else _override_kind(o),
-            ]
-            for o in sorted(report.overrides, key=_override_key)
-        ]
-        out.extend(_table(["package", "wanted", "forced to", "by", "kind"], rows, pal))
-    else:
-        w("none detected")
-    w("")
-
-    # ---- missing binaries ------------------------------------------------
     problems = report.problems()
     n_missing = sum(len(d.missing()) for d in problems)
     w(pal.bold("Missing binaries (%d)" % n_missing))
     w("")
     if problems:
+        # No package_id column: it is one more thing to skip past here, and
+        # the HTML table carries it as a tooltip anyway.
         rows = []
         for dep in sorted(problems, key=lambda d: d.ref.lower()):
             for bt in dep.missing():
-                status, pid, _ = dep.binaries[bt]
-                reason = (pal.warn if status == "CacheOnly" else pal.bad)(_reason(status))
-                rows.append([dep.ref, _resolved_bt(dep, bt), pid, reason])
-        out.extend(_table(["package", "build type", "package_id", "reason"], rows, pal))
+                status = dep.binaries[bt][0]
+                colour = pal.warn if status == "CacheOnly" else pal.bad
+                rows.append([dep.ref, _resolved_bt(dep, bt), colour(_reason(status))])
+        out.extend(_table(["package", "build type", "reason"], rows, pal))
     else:
         w(pal.ok("All packages have binaries on the remote for: " + ", ".join(report.build_types)))
-    w("")
-
-    # ---- newer versions --------------------------------------------------
-    # Informational only: a newer reference existing does not fail the run.
-    w(pal.bold("Newer versions (%d)" % len(report.updates)))
-    w("")
-    if report.updates:
-        rows = [
-            [u.ref, pal.warn(u.latest), u.remote]
-            + [_date(u.current_time), _date(u.latest_time), u.note]
-            for u in sorted(report.updates, key=_update_key)
-        ]
-        headers = ["package", "newest", "remote", "exported", "newest exported", "note"]
-        out.extend(_table(headers, rows, pal))
-    elif not report.checked_updates:
-        w("not checked (--no-check-updates)")
-    else:
-        w(pal.ok("every package is the newest version on the remote"))
-    w("")
-
-    # ---- update order ----------------------------------------------------
-    # Informational like the section above: how to get from the graph above to
-    # a root on the newest references, deepest package first.
-    steps = _update_order(report)
-    w(pal.bold("Update order (%d waves)" % (steps[-1].wave if steps else 0)))
-    w("")
-    if steps:
-        rows = [
-            [
-                str(s.wave),
-                s.ref,
-                pal.warn(s.action) if s.latest else s.action,
-                ", ".join(s.blocked_by) or "-",
-            ]
-            for s in steps
-        ]
-        out.extend(_table(["wave", "package", "action", "blocked by"], rows, pal))
-    elif not report.checked_updates:
-        w("not checked (--no-check-updates)")
-    else:
-        w(pal.ok("nothing to update"))
-    w("")
-
-    # ---- hierarchy -------------------------------------------------------
-    w(pal.bold("Dependency hierarchy"))
-    w("")
-    tag_style = {"path": pal.dim, "override": pal.warn, "missing": pal.bad}
-    out.extend(_tree_lines(report, lambda kind, text: tag_style.get(kind, str)(text)))
     return "\n".join(out) + "\n"
 
 
@@ -1349,6 +1281,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         with open(args.html, "w", encoding="utf-8") as fh:
             fh.write(render_html(report))
         sys.stdout.write("HTML report written to %s\n" % args.html)
+    else:
+        # The text report is deliberately a summary; say where the rest is.
+        sys.stdout.write("Full report: --html FILE\n")
     return 1 if report.problems() else 0
 
 

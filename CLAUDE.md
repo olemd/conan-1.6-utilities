@@ -68,15 +68,14 @@ Users install/upgrade on their own machine with
   is both direct and transitive is direct). `Dep.paths` holds one path per
   direct parent (shortest path to that parent + parent) – bounded, unlike
   "all paths". The `via` column renders them one per line as `A -> B`
-  (`→`/`<br>` in HTML); `_table()` supports multi-line cells. Both renderers
-  sort dependency rows on (via, name) via `_dep_key` so each chain reads as a
-  block, put overrides before missing binaries, and sort both alphabetically.
+  (`→`/`<br>` in HTML); `_table()` supports multi-line cells. The HTML
+  renderer sorts dependency rows on (via, name) via `_dep_key` so each chain
+  reads as a block, and puts overrides before missing binaries.
   `report.deps` itself keeps (depth, path, host before build, name) order –
   the tree section and `problems()` rely on it. The tree keeps graph order.
 - **Tree tags are typed.** `_tree_rows()` yields `(head, [(kind, text)], tail)`
-  with kinds path/build-require/override/range/missing; `_tree_lines()` (text,
-  ANSI via a `fmt_tag` callback) and the HTML renderer (`<span class=…>`)
-  colour by kind from that one source. Add new tree annotations there, never
+  with kinds path/build-require/override/range/missing; the HTML renderer
+  colours by kind (`<span class=…>`) from that one source. Add new tree annotations there, never
   by string-replacing rendered lines.
 - **Only the remote counts, and the source is always shown.** Conan says
   `Cache` for a locally cached binary without asking the remote, so
@@ -93,11 +92,19 @@ Users install/upgrade on their own machine with
   so version order wins and the note column (`_update_note`) spells out any
   disagreement; unreadable manifests render as `?`. On by default
   (`--no-check-updates` disables, `Report.checked_updates`); never affects
-  the exit code. Do not fetch every candidate's manifest. Both dependency
-  tables join `report.updates` on `Dep.ref` for their `newest` column
-  (`_newest`, version only – user/channel always match) and omit the
+  the exit code. Do not fetch every candidate's manifest. The HTML
+  dependency table joins `report.updates` on `Dep.ref` for its `newest`
+  column (`_newest`, version only – user/channel always match) and omits the
   column entirely when `checked_updates` is False, so an empty cell can
   never be read as "up to date".
+- **The text output is a summary; the HTML report is the report.** The user
+  reads the HTML one, so `render_text` is the header, `_summary()` (one line
+  of counts) and the missing binaries – nothing else, and no package_id
+  column. Everything else (dependency table, overrides, newer versions,
+  update order, tree) is HTML-only; do not add a section back to the text
+  report. `main()` prints `Full report: --html FILE` when `--html` was not
+  used. Renderer tests therefore assert on HTML, except for the summary and
+  the missing-binaries table.
 - **The update order is a wave plan, not just a topological sort.**
   `_update_order()` grows the outdated set to a fixpoint over
   `Dep.requires` (a consumer of an outdated package must be re-released for
@@ -123,9 +130,8 @@ Users install/upgrade on their own machine with
   header makes the file usable via `uv run conandeps.py` without a checkout.
 - **Exit codes:** `0` fine, `1` missing binaries, `2` Conan error. CI relies
   on this.
-- **Tables and colour, consistently.** Dependencies, missing binaries and
-  overrides are all rendered through the same `_table()` helper (text) and
-  `_html_table()` (HTML). Colour is an aid only – every state is also spelled
+- **Tables and colour, consistently.** The text missing-binaries table uses
+  `_table()`; every HTML table uses `_html_table()`. Colour is an aid only – every state is also spelled
   out in words – and `_table()` aligns on *visible* width so ANSI codes never
   break columns. `--color auto` is the default (terminal + no `NO_COLOR`).
 - **stdout is the report, stderr is progress.** Graph resolution against a
