@@ -652,7 +652,7 @@ def build_report(
 # Text rendering
 # --------------------------------------------------------------------------- #
 _MARK = {
-    "CacheOnly": "not available",
+    "CacheOnly": "local cache only",
     "Missing": "MISSING",
     "Build": "build",
     "n/a": "-",
@@ -885,6 +885,11 @@ def _cell(
     return (text + pal.dim(" (via %s)" % fallback)) if fallback else text
 
 
+def _reason(status: str) -> str:
+    """Why a binary counts as missing; the same words in both renderers."""
+    return _MARK["CacheOnly"] if status == "CacheOnly" else "no binary anywhere"
+
+
 def _override_kind(o: Override) -> str:
     return "explicit (override=True)" if o.explicit else "implicit (newer requirement downstream)"
 
@@ -1000,11 +1005,7 @@ def render_text(report: Report, color: bool = False) -> str:
         for dep in sorted(problems, key=lambda d: d.ref.lower()):
             for bt in dep.missing():
                 status, pid, _ = dep.binaries[bt]
-                reason = (
-                    pal.warn("not on remote, in local cache only")
-                    if status == "CacheOnly"
-                    else pal.bad("no binary anywhere")
-                )
+                reason = (pal.warn if status == "CacheOnly" else pal.bad)(_reason(status))
                 rows.append([dep.ref, _resolved_bt(dep, bt), pid, reason])
         out.extend(_table(["package", "build type", "package_id", "reason"], rows, pal))
     else:
@@ -1181,10 +1182,9 @@ def render_html(report: Report) -> str:
         for dep in sorted(problems, key=lambda d: d.ref.lower()):
             for bt in dep.missing():
                 status, pid, _ = dep.binaries[bt]
-                reason = (
-                    '<span class="cacheonly">not on remote, in local cache only</span>'
-                    if status == "CacheOnly"
-                    else '<span class="missing">no binary anywhere</span>'
+                reason = '<span class="%s">%s</span>' % (
+                    "cacheonly" if status == "CacheOnly" else "missing",
+                    e(_reason(status)),
                 )
                 rows.append(
                     [e(dep.ref), e(_resolved_bt(dep, bt)), "<code>%s</code>" % e(pid), reason]

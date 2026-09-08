@@ -81,7 +81,8 @@ Users install/upgrade on their own machine with
 - **Only the remote counts, and the source is always shown.** Conan says
   `Cache` for a locally cached binary without asking the remote, so
   `_RemoteIndex` verifies cache hits with `search_packages` on the remote.
-  Cache-only binaries are reported as `not available` and count as a
+  Cache-only binaries are reported as `local cache only` (one wording for
+  the cell and the missing-binaries reason, `_reason`) and count as a
   problem (exit 1). Every available cell names the remote. The user rejected
   an opt-in flag for this – it is the tool's core question.
 - **The update check is version-first, timestamp-informed.** `_UpdateChecker`

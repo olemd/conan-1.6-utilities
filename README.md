@@ -24,7 +24,7 @@ Given a `conanfile.py`, `conandeps` tells you four things in one report:
    list you choose), evaluated for *your exact profile* (compiler, version,
    libcxx, arch, options, …), not "some binary with that build type". Every
    cell names the remote that has the binary; a binary that only lives in
-   your local cache is reported as not available.
+   your local cache is reported as local cache only, and counts as missing.
 3. **Which requirements were overridden** – both explicit
    `self.requires("x/2.0", override=True)` and implicit ones, where a
    downstream consumer simply asks for a newer version than a transitive
@@ -171,7 +171,7 @@ path of its branch so deep indentation never has to be counted.
 
 * a remote name (e.g. `myremote`) – the remote has a binary for the package_id your
   profile produces. Hover a cell in the HTML report to see the package_id.
-* `not available` – the binary exists only in your local Conan cache; the
+* `local cache only` – the binary exists in your local Conan cache, but the
   remote does not have it, so a clean machine or CI would fail. Counts as
   missing.
 * `MISSING` – no binary anywhere.

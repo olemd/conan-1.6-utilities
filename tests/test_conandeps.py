@@ -620,7 +620,7 @@ def test_cache_only_is_not_available(conan_env):
     assert libbar.missing() == ["Debug", "RelWithDebInfo"]
 
     text = conandeps.render_text(report)
-    assert "not available" in text and "in local cache only" in text
+    assert "local cache only" in text  # the cell and the missing-binaries reason
     assert 'class="cacheonly"' in conandeps.render_html(report)
     _conan(env, "remove", "libbar/1.1@", "-f")  # leave the cache as other tests expect
 
