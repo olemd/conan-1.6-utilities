@@ -384,8 +384,8 @@ def test_updates_render_sorted_with_dates():
     assert '<span class="new">alpha/2.0</span>' in html_section
 
 
-def test_html_dependency_table_shows_newest_version():
-    """The dependency table joins the update check onto every package row.
+def test_dependency_table_shows_newest_version():
+    """Both dependency tables join the update check onto every package row.
 
     The cell carries the version only - the update checker keeps name, user
     and channel, so that is the whole difference from the package column -
@@ -396,13 +396,20 @@ def test_html_dependency_table_shows_newest_version():
         "b#host": _mini_dep("b/1.0", direct=True),
     }
     ups = [conandeps.Update("a/1.0", "a/2.0", "test", None, None, "newer version")]
+
     table = conandeps.render_html(_mini_report(deps, updates=ups)).split("<h2>Overrides")[0]
     assert "<th>newest</th>" in table
     assert '<td><span class="new" title="newer version">2.0</span></td>' in table
     assert '<td><span class="ok">up to date</span></td>' in table
 
-    plain = conandeps.render_html(_mini_report(deps, checked_updates=False))
-    assert "<th>newest</th>" not in plain.split("<h2>Overrides")[0]
+    text = conandeps.render_text(_mini_report(deps, updates=ups)).split("Overrides")[0]
+    assert re.search(r"package\s+via\s+ctx\s+newest\s+Release", text)
+    assert re.search(r"^a/1\.0\s+-\s+host\s+2\.0\s", text, re.M)
+    assert re.search(r"^b/1\.0\s+-\s+host\s+up to date\s", text, re.M)
+
+    plain = _mini_report(deps, checked_updates=False)
+    assert "<th>newest</th>" not in conandeps.render_html(plain).split("<h2>Overrides")[0]
+    assert "newest" not in conandeps.render_text(plain).split("Overrides")[0]
 
 
 def test_updates_not_checked_message():

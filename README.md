@@ -101,13 +101,13 @@ profile: arch=x86_64, compiler=gcc, compiler.libcxx=libstdc++11, compiler.versio
 
 Dependencies (4) and binary availability
 
-package     via              ctx   Release   Debug     RelWithDebInfo
----------------------------------------------------------------------
-MyDepA/1.0  -                host  myremote  myremote  myremote
-MyDepB/1.0  -                host  myremote  myremote  myremote
-boost/1.8   MyDepA           host  myremote  myremote  myremote
+package     via              ctx   newest      Release   Debug     RelWithDebInfo
+---------------------------------------------------------------------------------
+MyDepA/1.0  -                host  up to date  myremote  myremote  myremote
+MyDepB/1.0  -                host  up to date  myremote  myremote  myremote
+boost/1.8   MyDepA           host  1.9         myremote  myremote  myremote
             MyDepB -> Zigma
-Zigma/1.0   MyDepB           host  myremote  myremote  MISSING
+Zigma/1.0   MyDepB           host  up to date  myremote  myremote  MISSING
 
 Overrides (1)
 
@@ -141,16 +141,16 @@ On a terminal the tables are coloured (green = on the remote, red = missing,
 yellow = cache-only / overridden version); `--color never` or the `NO_COLOR`
 environment variable turns that off, and redirecting stdout to a file never
 produces colour codes unless you pass `--color always`. The HTML report uses
-the same colour coding, and its dependency table has one extra column,
-`newest`: the newest version of that package on the remote, or `up to date`
-when the resolved one is already the newest. `--no-check-updates` drops the
-column along with the `Newer versions` section.
+the same colour coding.
 
 Reading the table: the `via` column is the shortest path from your conanfile
 to the package – `-` for a direct dependency, `MyDepB` for something MyDepB
 requires, `MyDepB -> Zigma` for something Zigma requires, and so on. A
 package required by several others gets one line per parent (boost above is
-pulled in by both MyDepA and Zigma), shortest path first. Rows are sorted
+pulled in by both MyDepA and Zigma), shortest path first. The `newest`
+column gives the newest version of that package on the remote, or `up to
+date` when the resolved one is already the newest; `--no-check-updates`
+removes the column along with the `Newer versions` section. Rows are sorted
 on the via column and then the package name (direct dependencies first), so
 a branch's transitive dependencies stay together; the dependency hierarchy
 section at the end shows the same

@@ -761,12 +761,21 @@ def render_text(report: Report, color: bool = False) -> str:
     # ---- dependencies ----------------------------------------------------
     w(pal.bold("Dependencies (%d) and binary availability" % len(report.deps)))
     w("")
-    rows = [
-        [dep.ref, _via(dep), dep.context]
-        + [_cell(*dep.binaries[bt], pal) for bt in report.build_types]
-        for dep in sorted(report.deps.values(), key=_dep_key)
-    ]
-    out.extend(_table(["package", "via", "ctx"] + list(report.build_types), rows, pal))
+    # Same "newest" column as the HTML table, from the same data; dropped
+    # entirely when --no-check-updates skipped the search.
+    newest = {u.ref: u for u in report.updates}
+    rows = []
+    for dep in sorted(report.deps.values(), key=_dep_key):
+        row = [dep.ref, _via(dep), dep.context]
+        if report.checked_updates:
+            u = newest.get(dep.ref)
+            row.append(pal.warn(_newest(u)) if u else pal.ok(_newest(u)))
+        row += [_cell(*dep.binaries[bt], pal) for bt in report.build_types]
+        rows.append(row)
+    headers = ["package", "via", "ctx"]
+    if report.checked_updates:
+        headers.append("newest")
+    out.extend(_table(headers + list(report.build_types), rows, pal))
     w("")
 
     # ---- overrides -------------------------------------------------------
@@ -864,22 +873,16 @@ def _version(ref: str) -> str:
     return ref.split("/", 1)[-1].split("@", 1)[0]
 
 
-def _newest_cell(update: Optional[Update]) -> str:
-    """The dependency table's "newest" cell for one package.
+def _newest(update: Optional[Update]) -> str:
+    """The dependency table's "newest" cell text, shared by both renderers.
 
     Only the version is rendered: ``_UpdateChecker`` considers candidates
     with the same name/user/channel only, so the version is the whole
     difference from the reference already shown in the package column.
     "up to date" is spelled out instead of left blank, so the cell never
-    reads like a value that could not be determined; the note explaining
-    how "newer" was decided is the cell's tooltip.
+    reads like a value that could not be determined.
     """
-    if update is None:
-        return '<span class="ok">up to date</span>'
-    return '<span class="new" title="%s">%s</span>' % (
-        html.escape(update.note),
-        html.escape(_version(update.latest)),
-    )
+    return _version(update.latest) if update else "up to date"
 
 
 def _html_table(headers: List[str], rows: List[List[str]]) -> str:
@@ -916,7 +919,13 @@ def render_html(report: Report) -> str:
     for dep in sorted(report.deps.values(), key=_dep_key):
         row = [e(dep.ref), e(_via(dep, " \u2192 ")).replace("\n", "<br>"), e(dep.context)]
         if report.checked_updates:
-            row.append(_newest_cell(newest.get(dep.ref)))
+            u = newest.get(dep.ref)
+            # The note explaining how "newer" was decided is the cell's tooltip.
+            row.append(
+                '<span class="new" title="%s">%s</span>' % (e(u.note), e(_newest(u)))
+                if u
+                else '<span class="ok">%s</span>' % _newest(u)
+            )
         for bt in report.build_types:
             status, pid, remote = dep.binaries[bt]
             cls = {"Remote": "ok", "Missing": "missing", "CacheOnly": "cacheonly"}.get(status, "na")
