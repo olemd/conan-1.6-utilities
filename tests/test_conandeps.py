@@ -658,6 +658,9 @@ def test_text_render_is_a_summary(report):
 def test_html_render(report):
     page = conandeps.render_html(report)
     assert page.count('">test</span>') == 16  # every available cell names the remote
+    # The host/build column is explained in prose under the table.
+    assert '<p class="note"><b>context</b>: <code>host</code> means' in page
+    assert "<code>build</code> means it is a build requirement" in page
     # Overrides table: wanted version struck through, forced version marked.
     assert '<td>libfoo/1.0</td><td><span class="old">libbar/1.0</span></td>' in page
     assert "explicit (override=True)" in page

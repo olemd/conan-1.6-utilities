@@ -156,7 +156,8 @@ linked into your binaries. `build` means it is a **build requirement**, a tool
 that merely runs during the build (cmake, a code generator, a compiler
 wrapper), so it is built for the machine doing the building, not for the
 target. The distinction matters when you cross-compile, where the two are
-different platforms and the same package can appear in both contexts.
+different platforms and the same package can appear in both contexts. The
+HTML report spells this out in a note under the table.
 
 The `newest` column gives the newest version of that package on the remote, or
 `up to date` when the resolved one is already the newest; `--no-check-updates`

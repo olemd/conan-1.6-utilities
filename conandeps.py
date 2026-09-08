@@ -1041,13 +1041,13 @@ th{background:#eee}code{font-size:.95em}
 .missing{color:#a40000;font-weight:700}.missing::before{content:"\\2717 "}
 .cacheonly{color:#8a5a00;font-weight:700}.cacheonly::before{content:"\\26A0 "}
 .na{color:#777}.old{color:#777;text-decoration:line-through}.new{color:#8a5a00;font-weight:700}
-.path{color:#1b4e8a}
+.path{color:#1b4e8a}.note{color:#555;max-width:60em;font-size:.92em}
 .explicit{color:#1b4e8a;font-weight:700}.implicit{color:#555}
 pre{background:#f5f5f5;padding:1rem;overflow-x:auto}
 @media (prefers-color-scheme:dark){body{background:#111;color:#eee}th{background:#222}
 th,td{border-color:#444}pre{background:#1c1c1c}.ok{color:#6fd66f}.missing{color:#ff7b7b}
 .cacheonly{color:#ffc857}.new{color:#ffc857}.explicit,.path{color:#8ab8f0}
-.na,.old,.implicit{color:#999}}
+.na,.old,.implicit,.note{color:#999}}
 """
 
 
@@ -1118,6 +1118,18 @@ def render_html(report: Report) -> str:
     if report.checked_updates:
         headers.append("newest")
     w(_html_table(headers + list(report.build_types), rows))
+    # host/build is Conan vocabulary, and the column is two words wide, so the
+    # page explains it in prose rather than in a tooltip nobody can reach on a
+    # phone.  Always shown: a graph without build requirements today may have
+    # one tomorrow, and the reader is rarely the person who ran the tool.
+    w(
+        '<p class="note"><b>context</b>: <code>host</code> means the package is part of '
+        "what you are building, compiled for your target platform and linked into your "
+        "binaries. <code>build</code> means it is a build requirement, a tool that only "
+        "runs during the build, such as cmake or a code generator, so it is built for the "
+        "machine doing the building. The two are the same platform unless you "
+        "cross-compile, and a package can appear in both contexts.</p>"
+    )
 
     # ---- overrides (before missing binaries, see render_text) ------------
     w("<h2>Overrides (%d)</h2>" % len(report.overrides))
