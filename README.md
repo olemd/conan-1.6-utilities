@@ -97,6 +97,7 @@ informational and never change the exit status.
 ```
 $ conandeps MyProject/conanfile.py -r myremote --html report.html
 conandeps report for MyProject/conanfile.py
+package  : myproject/1.2
 remote   : myremote
 profile  : arch=x86_64, compiler=gcc, compiler.libcxx=libstdc++11, compiler.version=14, os=Linux
 
@@ -113,7 +114,9 @@ HTML report written to report.html
 ```
 
 That is the whole terminal report: the header, one line of counts, and what
-is broken. It matches the exit status, so a CI log shows the reason for a
+is broken. The `package` line is the name and version the conanfile gives
+itself, so a report kept as a file still says what it was about; a conanfile
+that names neither simply has no such line. It matches the exit status, so a CI log shows the reason for a
 failure without scrolling. Without `--html` the last line is instead
 `Full report: --html FILE`. The reason column is coloured on a terminal (red
 = no binary anywhere, yellow = local cache only); `--color never` or the
@@ -125,7 +128,9 @@ file never produces colour codes unless you pass `--color always`.
 `--html FILE` writes the report proper: one self-contained page, no scripts
 and no external assets, so it can be attached to a build or mailed to a
 colleague. It follows the same colour coding, adapts to a dark theme, and has
-five tables plus the dependency tree.
+five tables plus the dependency tree. The same header opens the page, and the
+package name and version become the browser tab's title, which matters once
+several reports are open at once.
 
 **Dependencies and binary availability**, one row per package:
 
@@ -181,11 +186,13 @@ MyProject/conanfile.py
 |   `-- boost/1.8  [MyDepA -> boost]
 `-- MyDepB/1.0
     `-- Zigma/1.0  [MyDepB -> Zigma; MISSING: RelWithDebInfo]
-        `-- boost/1.8  [MyDepB -> Zigma -> boost; overrides boost/1.7 (implicit by your conanfile)]
+        `-- boost/1.8  [MyDepB -> Zigma -> boost; overrides boost/1.7 (implicit by myproject/1.2)]
 ```
 
 The **overrides** and **newer versions** tables list what was rewritten and
-what has a newer reference on the remote. The `Update order` section answers
+what has a newer reference on the remote. An override is credited to the
+package that forced it, which for your own project is the name and version in
+its conanfile, or `your conanfile` when it declares neither. The `Update order` section answers
 "what do I bump first?". A package is in
 the plan when the remote has a newer version of it, and also when one of its
 requirements has one: MyDepA and Zigma above are at their newest version, but

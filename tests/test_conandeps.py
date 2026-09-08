@@ -65,6 +65,8 @@ CONSUMER = textwrap.dedent("""\
     from conans import ConanFile
 
     class Consumer(ConanFile):
+        name = "myproject"
+        version = "0.1"
         settings = "os", "compiler", "build_type", "arch"
         requires = ("libfoo/1.0", "libbaz/2.0", "libqux/1.1", "hdr/1.0")
 
@@ -275,7 +277,9 @@ def test_via_lists_every_parent_path():
     ]
 
 
-def _mini_report(deps, overrides=(), updates=(), checked_updates=True, fallbacks=None):
+def _mini_report(
+    deps, overrides=(), updates=(), checked_updates=True, fallbacks=None, package=None
+):
     """Hand-built single-build-type Report for renderer ordering tests."""
     return conandeps.Report(
         "conanfile.py",
@@ -289,6 +293,7 @@ def _mini_report(deps, overrides=(), updates=(), checked_updates=True, fallbacks
         list(updates),
         checked_updates,
         dict(fallbacks or {}),
+        package,
     )
 
 
@@ -488,6 +493,21 @@ def test_missing_binaries(report):
                 assert pid
 
 
+def test_header_names_the_package_when_the_conanfile_has_one():
+    """A conanfile that names and versions itself is identified in the report."""
+    deps = {"a#host": _mini_dep("a/1.0", direct=True)}
+    named = _mini_report(deps, package="myproject/0.1")
+    assert "\npackage  : myproject/0.1\n" in conandeps.render_text(named)
+    page = conandeps.render_html(named)
+    assert "<title>conandeps: myproject/0.1</title>" in page
+    assert "<b>package:</b> myproject/0.1<br><b>conanfile:</b> conanfile.py" in page
+
+    # A conanfile without a name simply has no package line.
+    anonymous = _mini_report(deps)
+    assert "package" not in conandeps.render_text(anonymous).split("\n\n")[0]
+    assert "<b>package:</b>" not in conandeps.render_html(anonymous)
+
+
 def test_fallback_file_parsing(tmp_path):
     """One section per build type; package names keep their case."""
     ini = tmp_path / "fallbacks.ini"
@@ -600,10 +620,13 @@ def test_cache_only_is_not_available(conan_env):
 
 
 def test_overrides(report):
+    # Conan names the overrider with the consumer's own reference, because
+    # this conanfile declares a name and a version; an unnamed one would be
+    # reported as "your conanfile".
     ov = {(o.package, o.old, o.new, o.by, o.explicit) for o in report.overrides}
     assert ov == {
-        ("libfoo/1.0", "libbar/1.0", "libbar/1.1", "your conanfile", True),
-        ("libbaz/2.0", "libqux/1.0", "libqux/1.1", "your conanfile", False),
+        ("libfoo/1.0", "libbar/1.0", "libbar/1.1", "myproject/0.1", True),
+        ("libbaz/2.0", "libqux/1.0", "libqux/1.1", "myproject/0.1", False),
     }
 
 
@@ -616,6 +639,7 @@ def test_text_render_is_a_summary(report):
     """
     text = conandeps.render_text(report)
     assert text.startswith("conandeps report for ")
+    assert "\npackage  : myproject/0.1\n" in text
     assert "\nremote   : test\n" in text
     assert "\n6 dependencies, 2 overrides, 1 newer version\n" in text
     assert "Missing binaries (2)" in text
@@ -643,7 +667,7 @@ def test_html_render(report):
     assert page.count("<table>") == 5
     # The tree carries a typed tag per annotation, coloured by kind.
     assert '[<span class="path">libfoo -&gt; libbar -&gt; libdeep</span>]' in page
-    assert '<span class="new">overrides libbar/1.0 (explicit by your conanfile)</span>' in page
+    assert '<span class="new">overrides libbar/1.0 (explicit by myproject/0.1)</span>' in page
     assert '<span class="missing">MISSING: Debug,RelWithDebInfo</span>' in page
     assert 'class="explicit"' in page and 'class="implicit"' in page
     assert "<script" not in page  # self-contained, static

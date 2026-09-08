@@ -97,6 +97,11 @@ Users install/upgrade on their own machine with
   column (`_newest`, version only – user/channel always match) and omits the
   column entirely when `checked_updates` is False, so an empty cell can
   never be read as "up to date".
+- **The report identifies the conanfile's own package.** `_root_ref()` reads
+  `name`/`version` off the root conanfile (both optional in Conan 1) into
+  `Report.package`; `_header()` is the one place that orders the header
+  label/value pairs for both renderers, and the HTML title falls back to the
+  path when the conanfile names nothing.
 - **The text output is a summary; the HTML report is the report.** The user
   reads the HTML one, so `render_text` is the header, `_summary()` (one line
   of counts) and the missing binaries – nothing else, and no package_id
@@ -118,7 +123,12 @@ Users install/upgrade on their own machine with
   and only emits `"<pkg>: requirement <old> overridden by <who> to <new>"`.
   `conandeps` captures the output stream with a non-coloured `ConanOutput`
   and matches `_OVERRIDE_RE`. `test_overrides` pins this format – if a Conan
-  patch release changes the wording, that test is the alarm.
+  patch release changes the wording, that test is the alarm. `<who>` is the
+  *downstream node's own reference*; Conan only writes "your conanfile" when
+  the consumer declares no name/version, so `_explicit_overrides` builds the
+  same string from `node.ref` – get that wrong and an explicit override is
+  reported as implicit. The test fixture's consumer is named
+  (`myproject/0.1`) precisely to keep that path covered.
 - **Both explicit and implicit overrides are reported.** `override=True`
   requirements are collected from `conanfile.requires` to label an override
   as explicit; everything else parsed from the WARN lines is implicit.

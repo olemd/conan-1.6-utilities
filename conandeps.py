@@ -187,6 +187,8 @@ class Report:
     checked_updates: bool = True  # False when --no-check-updates skipped the check
     # build_type -> {package name: build type checked instead} (--fallbacks)
     fallbacks: Dict[str, Dict[str, str]] = field(default_factory=dict)
+    # "name/version" of the conanfile itself, when it declares them
+    package: Optional[str] = None
 
     def problems(self) -> List[Dep]:
         return [d for d in self.deps.values() if d.missing()]
@@ -244,15 +246,30 @@ def _key_of(dep: Dep) -> str:
     return "%s#%s" % (dep.name, dep.context)
 
 
+def _root_ref(conanfile) -> Optional[str]:
+    """The conanfile's own "name/version", when it declares them.
+
+    A consumer conanfile.py need not name or version itself; Conan leaves both
+    None then and the report simply has no package line.
+    """
+    name = getattr(conanfile, "name", None)
+    version = getattr(conanfile, "version", None)
+    if not name:
+        return None
+    return "%s/%s" % (name, version) if version else name
+
+
 def _explicit_overrides(graph) -> set:
-    """Set of (declaring ref or 'your conanfile', package name) for override=True requires."""
+    """Set of (declaring ref or 'your conanfile', package name) for override=True requires.
+
+    Conan names the overrider in its WARN line with the downstream node's own
+    reference, and only falls back to "your conanfile" for a consumer that does
+    not name and version itself.  The same string has to be built here, or an
+    explicit override by a named conanfile is read back as an implicit one.
+    """
     result = set()
     for node in graph.nodes:
-        who = (
-            "your conanfile"
-            if node.ref is None or node.recipe in ("Consumer", "Virtual")
-            else str(node.ref)
-        )
+        who = str(node.ref) if node.ref is not None and node.ref.name else "your conanfile"
         for req in node.conanfile.requires.values():
             if req.override:
                 result.add((who, req.ref.name))
@@ -572,6 +589,7 @@ def build_report(
     overrides: List[Override] = []
     root_requires: List[str] = []
     profile_settings: Dict[str, str] = {}
+    package: Optional[str] = None
     explicit: set = set()
     index = _RemoteIndex(api, remote)
     fallbacks = fallbacks or {}
@@ -610,6 +628,7 @@ def build_report(
             "[%d/%d] %s: %d packages, %d missing binaries (%.1fs)"
             % (i, total, bt, len(graph.nodes) - 1, missing, time.monotonic() - t0),
         )
+        package = package or _root_ref(root_conanfile)
         if not root_requires:
             root_requires = [str(r.ref) for r in root_conanfile.requires.values()]
             profile_settings = {
@@ -649,6 +668,7 @@ def build_report(
         updates,
         check_updates,
         fallbacks,
+        package,
     )
 
 
@@ -952,6 +972,23 @@ def _summary(report: Report) -> str:
     return ", ".join(parts)
 
 
+def _header(report: Report, with_conanfile: bool = False) -> List[Tuple[str, str]]:
+    """The report header as label/value pairs, in order, skipping what is unset.
+
+    Shared by both renderers so they never drift apart.  The text report puts
+    the conanfile path in its title line instead, so that pair is optional.
+    """
+    pairs = [("package", report.package)]
+    if with_conanfile:
+        pairs.append(("conanfile", report.conanfile))
+    pairs += [
+        ("remote", report.remote or "(all configured remotes)"),
+        ("profile", ", ".join("%s=%s" % kv for kv in report.profile.items())),
+        ("fallbacks", _fallback_summary(report.fallbacks) if report.fallbacks else None),
+    ]
+    return [(label, value) for label, value in pairs if value]
+
+
 def render_text(report: Report, color: bool = False) -> str:
     """The terminal report: the header, a one-line count and the problems.
 
@@ -965,11 +1002,10 @@ def render_text(report: Report, color: bool = False) -> str:
     out: List[str] = []
     w = out.append
     w(pal.bold("conandeps report for %s" % report.conanfile))
-    # Labels are padded to the longest one so the header reads as a block.
-    w("remote   : %s" % (report.remote or "(all configured remotes)"))
-    w("profile  : " + ", ".join("%s=%s" % kv for kv in report.profile.items()))
-    if report.fallbacks:
-        w("fallbacks: " + _fallback_summary(report.fallbacks))
+    # Labels are padded to the longest one there is, so the header reads as a
+    # block whether or not the optional lines are present.
+    for label, value in _header(report):
+        w("%-9s: %s" % (label, value))
     w("")
     w(_summary(report))
     w("")
@@ -1044,19 +1080,15 @@ def render_html(report: Report) -> str:
     parts: List[str] = []
     w = parts.append
     w('<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">')
-    w("<title>conandeps: %s</title><style>%s</style></head><body>" % (e(report.conanfile), _CSS))
-    w("<h1>conandeps report</h1>")
+    # The package, when the conanfile names itself, is the better browser-tab
+    # title: a path says little when several reports are open at once.
     w(
-        "<p><b>conanfile:</b> %s<br><b>remote:</b> %s<br><b>profile:</b> %s%s</p>"
-        % (
-            e(report.conanfile),
-            e(report.remote or "(all configured remotes)"),
-            e(", ".join("%s=%s" % kv for kv in report.profile.items())),
-            "<br><b>fallbacks:</b> %s" % e(_fallback_summary(report.fallbacks))
-            if report.fallbacks
-            else "",
-        )
+        "<title>conandeps: %s</title><style>%s</style></head><body>"
+        % (e(report.package or report.conanfile), _CSS)
     )
+    w("<h1>conandeps report</h1>")
+    header = _header(report, with_conanfile=True)
+    w("<p>%s</p>" % "<br>".join("<b>%s:</b> %s" % (e(k), e(v)) for k, v in header))
 
     # ---- dependencies ----------------------------------------------------
     w("<h2>Dependencies (%d) and binary availability</h2>" % len(report.deps))
