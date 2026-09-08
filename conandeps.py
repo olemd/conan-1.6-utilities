@@ -859,6 +859,29 @@ th,td{border-color:#444}pre{background:#1c1c1c}.ok{color:#6fd66f}.missing{color:
 """
 
 
+def _version(ref: str) -> str:
+    """The version part of a "name/version[@user/channel]" reference."""
+    return ref.split("/", 1)[-1].split("@", 1)[0]
+
+
+def _newest_cell(update: Optional[Update]) -> str:
+    """The dependency table's "newest" cell for one package.
+
+    Only the version is rendered: ``_UpdateChecker`` considers candidates
+    with the same name/user/channel only, so the version is the whole
+    difference from the reference already shown in the package column.
+    "up to date" is spelled out instead of left blank, so the cell never
+    reads like a value that could not be determined; the note explaining
+    how "newer" was decided is the cell's tooltip.
+    """
+    if update is None:
+        return '<span class="ok">up to date</span>'
+    return '<span class="new" title="%s">%s</span>' % (
+        html.escape(update.note),
+        html.escape(_version(update.latest)),
+    )
+
+
 def _html_table(headers: List[str], rows: List[List[str]]) -> str:
     """Rows are lists of already-escaped/markup cell strings."""
     head = "".join("<th>%s</th>" % html.escape(h) for h in headers)
@@ -884,16 +907,26 @@ def render_html(report: Report) -> str:
 
     # ---- dependencies ----------------------------------------------------
     w("<h2>Dependencies (%d) and binary availability</h2>" % len(report.deps))
+    # The newest version each package has on the remote, from the same data as
+    # the "Newer versions" section below.  With --no-check-updates nothing was
+    # searched, so the column is dropped rather than filled with cells that
+    # would read as "up to date".
+    newest = {u.ref: u for u in report.updates}
     rows = []
     for dep in sorted(report.deps.values(), key=_dep_key):
         row = [e(dep.ref), e(_via(dep, " \u2192 ")).replace("\n", "<br>"), e(dep.context)]
+        if report.checked_updates:
+            row.append(_newest_cell(newest.get(dep.ref)))
         for bt in report.build_types:
             status, pid, remote = dep.binaries[bt]
             cls = {"Remote": "ok", "Missing": "missing", "CacheOnly": "cacheonly"}.get(status, "na")
             text = e(_cell(status, pid, remote, _Palette(False)))
             row.append('<span class="%s" title="package_id %s">%s</span>' % (cls, e(pid), text))
         rows.append(row)
-    w(_html_table(["package", "via", "context"] + list(report.build_types), rows))
+    headers = ["package", "via", "context"]
+    if report.checked_updates:
+        headers.append("newest")
+    w(_html_table(headers + list(report.build_types), rows))
 
     # ---- overrides (before missing binaries, see render_text) ------------
     w("<h2>Overrides (%d)</h2>" % len(report.overrides))

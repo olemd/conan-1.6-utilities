@@ -83,7 +83,11 @@ Users install/upgrade on their own machine with
   so version order wins and the note column (`_update_note`) spells out any
   disagreement; unreadable manifests render as `?`. On by default
   (`--no-check-updates` disables, `Report.checked_updates`); never affects
-  the exit code. Do not fetch every candidate's manifest.
+  the exit code. Do not fetch every candidate's manifest. The HTML
+  dependency table joins `report.updates` on `Dep.ref` for its `newest`
+  column (`_newest_cell`, version only – user/channel always match) and
+  omits the column entirely when `checked_updates` is False, so an empty
+  cell can never be read as "up to date".
 - **Overrides are parsed from Conan's WARN output.** Conan 1 does not record
   overrides on the graph; `Requirements.update()` mutates `req.ref` in place
   and only emits `"<pkg>: requirement <old> overridden by <who> to <new>"`.

@@ -141,7 +141,10 @@ On a terminal the tables are coloured (green = on the remote, red = missing,
 yellow = cache-only / overridden version); `--color never` or the `NO_COLOR`
 environment variable turns that off, and redirecting stdout to a file never
 produces colour codes unless you pass `--color always`. The HTML report uses
-the same colour coding.
+the same colour coding, and its dependency table has one extra column,
+`newest`: the newest version of that package on the remote, or `up to date`
+when the resolved one is already the newest. `--no-check-updates` drops the
+column along with the `Newer versions` section.
 
 Reading the table: the `via` column is the shortest path from your conanfile
 to the package – `-` for a direct dependency, `MyDepB` for something MyDepB
