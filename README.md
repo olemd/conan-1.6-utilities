@@ -127,6 +127,16 @@ package    newest     remote    exported    newest exported  note
 ------------------------------------------------------------------------
 boost/1.8  boost/1.9  myremote  2026-03-02  2026-08-20       newer version
 
+Update order (4 waves)
+
+wave  package                 action             blocked by
+---------------------------------------------------------------
+1     boost/1.8               update to 1.9      -
+2     MyDepA/1.0              re-release         boost
+2     Zigma/1.0               re-release         boost
+3     MyDepB/1.0              re-release         Zigma
+4     MyProject/conanfile.py  bump requirements  MyDepA, MyDepB
+
 Dependency hierarchy
 
 MyProject/conanfile.py
@@ -167,6 +177,14 @@ path of its branch so deep indentation never has to be counted.
 * `-` – not applicable (Conan marked the node `Skip` or `Editable`).
 * Header-only packages show `ok` everywhere: their package_id ignores
   `build_type`.
+
+The `Update order` section answers "what do I bump first?". A package is in
+the plan when the remote has a newer version of it, and also when one of its
+requirements has one: MyDepA and Zigma above are at their newest version, but
+they still have to be re-released against boost/1.9 before your project can
+see it. Everything in a wave is independent of everything else in that wave,
+so a wave can be done in parallel, and your conanfile is always the last one.
+`--no-check-updates` skips this section too.
 
 Things worth knowing:
 

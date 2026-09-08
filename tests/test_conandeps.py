@@ -295,9 +295,10 @@ def _mini_report(deps, overrides=(), updates=(), checked_updates=True):
     )
 
 
-def _mini_dep(ref, direct=False, paths=(), status="Remote"):
+def _mini_dep(ref, direct=False, paths=(), status="Remote", requires=()):
     dep = conandeps.Dep(ref=ref, context="host", direct=direct)
     dep.paths = [list(p) for p in paths]
+    dep.requires = list(requires)
     dep.binaries = {"Release": (status, "f" * 40, "test" if status == "Remote" else None)}
     return dep
 
@@ -419,6 +420,68 @@ def test_updates_not_checked_message():
     assert "Not checked (--no-check-updates)." in conandeps.render_html(report)
 
 
+def test_update_order_waves_consumers_after_requirements():
+    """Consumers of an outdated package are in the plan, deepest wave first.
+
+    Only boost has a newer version, but MyDepA and Zigma have to be
+    re-released against it before your conanfile can see it. Those two share
+    a wave because neither requires the other; MyDepB waits for Zigma, and
+    the conanfile is always last. hdr requires nothing outdated, so it is
+    left out of the plan entirely.
+    """
+    deps = {
+        "MyDepA#host": _mini_dep("MyDepA/1.0", direct=True, requires=["boost"]),
+        "MyDepB#host": _mini_dep("MyDepB/1.0", direct=True, requires=["Zigma"]),
+        "Zigma#host": _mini_dep("Zigma/1.0", paths=[["MyDepB"]], requires=["boost"]),
+        "boost#host": _mini_dep("boost/1.8", paths=[["MyDepA"]]),
+        "hdr#host": _mini_dep("hdr/1.0", direct=True),
+    }
+    ups = [conandeps.Update("boost/1.8", "boost/1.9", "test", None, None, "newer version")]
+    steps = conandeps._update_order(_mini_report(deps, updates=ups))
+    assert [(s.wave, s.ref) for s in steps] == [
+        (1, "boost/1.8"),
+        (2, "MyDepA/1.0"),
+        (2, "Zigma/1.0"),
+        (3, "MyDepB/1.0"),
+        (4, "conanfile.py"),
+    ]
+    assert steps[0].action == "update to 1.9" and steps[0].blocked_by == []
+    assert steps[1].action == "re-release" and steps[1].blocked_by == ["boost"]
+    assert steps[-1].action == "bump requirements"
+    assert steps[-1].blocked_by == ["MyDepA", "MyDepB"]  # direct requirements only
+
+    text = conandeps.render_text(_mini_report(deps, updates=ups))
+    section = text.split("Update order (4 waves)")[1].split("Dependency hierarchy")[0]
+    assert re.search(r"^1\s+boost/1\.8\s+update to 1\.9\s+-$", section, re.M)
+    assert re.search(r"^4\s+conanfile\.py\s+bump requirements\s+MyDepA, MyDepB$", section, re.M)
+    page = conandeps.render_html(_mini_report(deps, updates=ups))
+    html_section = page.split("<h2>Update order (4 waves)</h2>")[1]
+    assert "<td>1</td><td>boost/1.8</td>" in html_section
+    assert '<span class="new">update to 1.9</span>' in html_section
+
+
+def test_update_order_empty_when_everything_is_newest():
+    """No updates means no plan; --no-check-updates says so instead of "none"."""
+    deps = {"a#host": _mini_dep("a/1.0", direct=True)}
+    assert conandeps._update_order(_mini_report(deps)) == []
+    assert "nothing to update" in conandeps.render_text(_mini_report(deps))
+    assert "Nothing to update." in conandeps.render_html(_mini_report(deps))
+    unchecked = _mini_report(deps, checked_updates=False)
+    order = conandeps.render_text(unchecked).split("Update order (0 waves)")[1]
+    assert "not checked (--no-check-updates)" in order
+
+
+def test_update_order_from_the_real_graph(report):
+    """libbar/1.1 is outdated, so libfoo (its only consumer) waits for it."""
+    steps = {s.ref: s for s in conandeps._update_order(report)}
+    assert steps["libbar/1.1"].wave == 1
+    assert steps["libbar/1.1"].action == "update to 1.2"
+    assert steps["libfoo/1.0"].wave == 2
+    assert steps["libfoo/1.0"].blocked_by == ["libbar"]
+    assert steps[report.conanfile].wave == 3
+    assert "libqux/1.1" not in steps  # nothing outdated below it
+
+
 def test_newer_versions(report):
     ups = {u.ref: u for u in report.updates}
     # libbar/1.2 sits on the remote unused; everything else is at its newest.
@@ -516,7 +579,8 @@ def test_text_and_html_render(report, tmp_path):
     assert "`-- " in text or "|-- " in text  # tree drawn
     page = conandeps.render_html(report)
     assert page.startswith("<!DOCTYPE html>") and 'class="missing"' in page
-    assert page.count("<table>") == 4  # dependencies, overrides, missing binaries, newer versions
+    # dependencies, overrides, missing binaries, newer versions, update order
+    assert page.count("<table>") == 5
     # The HTML tree carries the same tags as the text tree, coloured by kind.
     assert '[<span class="path">libfoo -&gt; libbar -&gt; libdeep</span>]' in page
     assert '<span class="new">overrides libbar/1.0 (explicit by your conanfile)</span>' in page

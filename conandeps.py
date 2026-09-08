@@ -23,6 +23,11 @@ Given a conanfile.py this tool:
     the report, and used to catch a reference that is newer only by date.
     Informational only - never affects the exit code.  Disable with
     ``--no-check-updates``.
+  * derives the order in which those packages have to be updated for the root
+    to end up on the newest references: a consumer of an outdated package
+    needs a re-release even when it is at its newest version itself, so the
+    plan is grouped into waves that can each be done in parallel, deepest
+    first, with your conanfile last.
 
 How it works
 ------------
@@ -52,7 +57,7 @@ import time
 import warnings
 from collections import OrderedDict
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 # Conan 1.x predates the stricter escape-sequence checks of recent Pythons and
 # emits a screenful of SyntaxWarning/DeprecationWarning from its own modules
@@ -136,6 +141,17 @@ class Update:
     current_time: Optional[int]  # export timestamp (epoch) of ``ref``'s recipe
     latest_time: Optional[int]  # export timestamp of ``latest``'s recipe
     note: str  # how "newer" was decided (see _update_note)
+
+
+@dataclass
+class Step:
+    """One package in the update order (see ``_update_order``)."""
+
+    ref: str  # package reference, or the conanfile itself for the last step
+    wave: int  # 1-based; every step in a wave can be done in parallel
+    action: str  # what to do, spelled out
+    latest: Optional[str]  # newer version to move to, None when only re-released
+    blocked_by: List[str]  # requirement names that have to be updated first
 
 
 @dataclass
@@ -638,6 +654,78 @@ def _tree_lines(report: Report, fmt_tag=None) -> List[str]:
     return lines
 
 
+def _update_order(report: Report) -> List[Step]:
+    """The order in which packages must be updated for the root to be newest.
+
+    A package is in the plan when the remote has a newer version of it, and
+    also when one of its requirements has one: a consumer must be re-released
+    against the new reference for it to reach your conanfile, even when the
+    consumer itself is at its newest version.  That set is grown to a fixpoint
+    rather than by one upward walk, so a package reached late still pulls its
+    own consumers in.
+
+    A step's wave is one past the deepest requirement it waits for, so every
+    step in a wave can be done in parallel and your conanfile always comes
+    last.  Names are resolved host-context-first exactly like ``_tree_rows``,
+    and a cycle (which Conan rejects, but the renderers defend against
+    anyway) stops the walk instead of recursing forever.
+    """
+    newest = {u.ref: u for u in report.updates}
+    by_name: Dict[str, Dep] = {}
+    for dep in report.deps.values():
+        by_name.setdefault(dep.name, dep)  # host first (insertion order)
+
+    affected = {name for name, dep in by_name.items() if dep.ref in newest}
+    changed = bool(affected)
+    while changed:
+        changed = False
+        for name, dep in by_name.items():
+            if name not in affected and any(r in affected for r in dep.requires):
+                affected.add(name)
+                changed = True
+    if not affected:
+        return []
+
+    waves: Dict[str, int] = {}
+
+    def wave_of(name: str, seen: Tuple[str, ...]) -> int:
+        if name in waves:
+            return waves[name]
+        if name in seen:
+            return 0  # cycle: do not recurse, the wave of the entry point wins
+        blockers = _blockers(by_name[name].requires, affected)
+        waves[name] = 1 + max([wave_of(b, seen + (name,)) for b in blockers] or [0])
+        return waves[name]
+
+    steps = []
+    for name in sorted(affected):
+        dep = by_name[name]
+        update = newest.get(dep.ref)
+        action = "update to %s" % _newest(update) if update else "re-release"
+        blocked = _blockers(dep.requires, affected)
+        steps.append(
+            Step(dep.ref, wave_of(name, ()), action, update.latest if update else None, blocked)
+        )
+    # The root is not a graph node: it always comes last, and its blockers are
+    # the direct requirements that moved.
+    direct = [d.name for d in report.deps.values() if d.direct]
+    steps.append(
+        Step(
+            report.conanfile,
+            max(s.wave for s in steps) + 1,
+            "bump requirements",
+            None,
+            _blockers(direct, affected),
+        )
+    )
+    return sorted(steps, key=lambda s: (s.wave, s.ref.lower()))
+
+
+def _blockers(requires: List[str], affected: Set[str]) -> List[str]:
+    """The requirement names in ``affected``, de-duplicated and sorted."""
+    return sorted({r for r in requires if r in affected}, key=str.lower)
+
+
 class _Palette:
     """ANSI colours for the terminal report; a no-op when disabled.
 
@@ -838,6 +926,29 @@ def render_text(report: Report, color: bool = False) -> str:
         w(pal.ok("every package is the newest version on the remote"))
     w("")
 
+    # ---- update order ----------------------------------------------------
+    # Informational like the section above: how to get from the graph above to
+    # a root on the newest references, deepest package first.
+    steps = _update_order(report)
+    w(pal.bold("Update order (%d waves)" % (steps[-1].wave if steps else 0)))
+    w("")
+    if steps:
+        rows = [
+            [
+                str(s.wave),
+                s.ref,
+                pal.warn(s.action) if s.latest else s.action,
+                ", ".join(s.blocked_by) or "-",
+            ]
+            for s in steps
+        ]
+        out.extend(_table(["wave", "package", "action", "blocked by"], rows, pal))
+    elif not report.checked_updates:
+        w("not checked (--no-check-updates)")
+    else:
+        w(pal.ok("nothing to update"))
+    w("")
+
     # ---- hierarchy -------------------------------------------------------
     w(pal.bold("Dependency hierarchy"))
     w("")
@@ -996,6 +1107,25 @@ def render_html(report: Report) -> str:
         w("<p>Not checked (--no-check-updates).</p>")
     else:
         w('<p class="ok">Every package is the newest version on the remote.</p>')
+
+    # ---- update order (same words as render_text) ------------------------
+    steps = _update_order(report)
+    w("<h2>Update order (%d waves)</h2>" % (steps[-1].wave if steps else 0))
+    if steps:
+        rows = [
+            [
+                str(s.wave),
+                e(s.ref),
+                '<span class="new">%s</span>' % e(s.action) if s.latest else e(s.action),
+                e(", ".join(s.blocked_by)) or "-",
+            ]
+            for s in steps
+        ]
+        w(_html_table(["wave", "package", "action", "blocked by"], rows))
+    elif not report.checked_updates:
+        w("<p>Not checked (--no-check-updates).</p>")
+    else:
+        w('<p class="ok">Nothing to update.</p>')
 
     # Tree text is escaped per fragment so the tag spans survive; the tag
     # classes reuse the table's colours (path = dim, override = yellow, ...).

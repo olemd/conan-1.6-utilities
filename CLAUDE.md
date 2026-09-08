@@ -88,6 +88,14 @@ Users install/upgrade on their own machine with
   (`_newest`, version only – user/channel always match) and omit the
   column entirely when `checked_updates` is False, so an empty cell can
   never be read as "up to date".
+- **The update order is a wave plan, not just a topological sort.**
+  `_update_order()` grows the outdated set to a fixpoint over
+  `Dep.requires` (a consumer of an outdated package must be re-released for
+  the new reference to reach the root, even at its own newest version), then
+  gives each package a wave one past its deepest blocker, so a wave is
+  parallelisable and the conanfile is always last. Names resolve
+  host-context-first like `_tree_rows`, and cycles stop the walk. It is
+  derived data: a function over `Report`, not a field on it.
 - **Overrides are parsed from Conan's WARN output.** Conan 1 does not record
   overrides on the graph; `Requirements.update()` mutates `req.ref` in place
   and only emits `"<pkg>: requirement <old> overridden by <who> to <new>"`.
