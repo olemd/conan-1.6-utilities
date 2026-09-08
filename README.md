@@ -65,7 +65,7 @@ if it requires authentication.
 ```
 conandeps CONANFILE [-r REMOTE] [-pr PROFILE] [-s KEY=VALUE] [-o PKG:KEY=VALUE]
           [--build-types Release,Debug,RelWithDebInfo] [-u] [--no-check-updates]
-          [--html FILE] [-v]
+          [--fallbacks FILE] [--html FILE] [-v]
 ```
 
 | Option | Meaning |
@@ -77,6 +77,7 @@ conandeps CONANFILE [-r REMOTE] [-pr PROFILE] [-s KEY=VALUE] [-o PKG:KEY=VALUE]
 | `--build-types` | Comma-separated build types to check. Default: `Release,Debug,RelWithDebInfo`. |
 | `-u`, `--update` | Ask the remote for newer recipes/binaries (`conan -u`). |
 | `--no-check-updates` | Skip the newer-version check (saves one recipe search per package, plus two manifest fetches per outdated one). |
+| `--fallbacks FILE` | INI file naming, per build type, the packages to check under another build type instead. See [Build type fallbacks](#build-type-fallbacks). |
 | `--html FILE` | Also write a self-contained HTML report (no scripts, no external assets). |
 | `-v` | Stream Conan's own output to stderr live. |
 | `-q` | Suppress the progress lines on stderr. |
@@ -96,8 +97,8 @@ informational and never change the exit status.
 ```
 $ conandeps MyProject/conanfile.py -r myremote
 conandeps report for MyProject/conanfile.py
-remote : myremote
-profile: arch=x86_64, compiler=gcc, compiler.libcxx=libstdc++11, compiler.version=14, os=Linux
+remote   : myremote
+profile  : arch=x86_64, compiler=gcc, compiler.libcxx=libstdc++11, compiler.version=14, os=Linux
 
 Dependencies (4) and binary availability
 
@@ -174,6 +175,8 @@ path of its branch so deep indentation never has to be counted.
   remote does not have it, so a clean machine or CI would fail. Counts as
   missing.
 * `MISSING` – no binary anywhere.
+* `myremote (via Release)` – found, but under a fallback build type; see
+  [Build type fallbacks](#build-type-fallbacks).
 * `-` – not applicable (Conan marked the node `Skip` or `Editable`).
 * Header-only packages show `ok` everywhere: their package_id ignores
   `build_type`.
@@ -197,6 +200,56 @@ Things worth knowing:
   version is part of the id). If that makes *all* build types of a package go
   `MISSING`, the report is telling the truth: no binary on the remote was built
   against the overridden version.
+
+### Build type fallbacks
+
+Some packages are simply never built for every build type – zlib may exist as
+`Release` and `Debug` only. Listing them in an INI file tells `conandeps`
+which build type to check instead. A section is the build type being checked,
+and each line names a package and the build type to use for it:
+
+```ini
+# fallbacks.ini
+[RelWithDebInfo]
+zlib = Release
+openssl = Release
+
+[Debug]
+icu = Release
+```
+
+```
+$ conandeps MyProject/conanfile.py -r myremote --fallbacks fallbacks.ini
+```
+
+The mapping is handed to Conan as a package-scoped setting
+(`zlib:build_type=Release`) – exactly what you would put in your profile when
+installing – so the package_id is the one Conan itself computes. If your
+`default_package_id_mode` makes a dependency's settings part of its consumers'
+ids, those consumers move along with it, just as they would in a real install.
+
+Listed packages then stop counting as missing binaries, and stop failing the
+exit code. Every cell that came from a fallback says so, so the report never
+claims a binary that does not exist:
+
+```
+package   via   ctx   Release   Debug     RelWithDebInfo
+--------------------------------------------------------------
+zlib/1.3  -     host  myremote  myremote  myremote (via Release)
+```
+
+If the fallback has no binary either, it is still a missing binary, and the
+row spells out which build type was actually looked for:
+
+```
+package   build type           package_id                                reason
+--------------------------------------------------------------------------------------------
+icu/70.1  Debug (via Release)  6b1f4c0a8d2e7b39f5c1a4d8e0b2f6c3a9d7e514  no binary anywhere
+```
+
+A section for a build type that is not in `--build-types` is dead config; the
+tool says so on stderr. A package mapped to its own build type would do
+nothing, and is rejected as an error.
 
 ### How it works
 

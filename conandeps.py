@@ -11,6 +11,10 @@ Given a conanfile.py this tool:
   * checks, for every dependency, whether a binary package exists on the
     chosen remote for each build_type we care about (Release, Debug and
     RelWithDebInfo by default) using the *exact* profile you would build with,
+  * accepts a fallback map (``--fallbacks``) for packages that are simply
+    not built for one of those build types - "check zlib's Release binary
+    when asked about RelWithDebInfo" - so a known and accepted gap stops
+    being reported as a missing binary,
   * reports every requirement override - explicit ``override=True`` ones as
     well as implicit ones where a downstream consumer simply asks for a newer
     version than a transitive dependency declared - as a hierarchy showing who
@@ -38,6 +42,12 @@ same ``conan info`` code path that ``conan install`` uses, and every node's
 honours ``package_id()`` customisations, options and the configured
 ``default_package_id_mode`` exactly the way a real install would.
 
+Build-type fallbacks use the same route: a fallback is passed to Conan as a
+package-scoped setting (``zlib:build_type=Release``), exactly what you would
+put in the profile when installing, so the package_id is Conan's, not ours,
+and the effect on the packages that depend on it is whatever the configured
+``default_package_id_mode`` says it is.
+
 Conan 1.x does not record overrides on the graph; the only trace is a warning
 emitted by ``Requirements.update()``.  We therefore capture Conan's output
 stream while the graph is built and parse those lines.
@@ -48,6 +58,7 @@ Targets Conan 1.66.  Uses only the standard library plus the Conan API.
 from __future__ import annotations
 
 import argparse
+import configparser
 import html
 import io
 import os
@@ -110,6 +121,10 @@ class Dep:
     settings: Dict[str, str] = field(default_factory=dict)
     # build_type -> (status, package_id, remote_name)
     binaries: Dict[str, Tuple[str, str, Optional[str]]] = field(default_factory=dict)
+    # build_type -> build type actually resolved for it (see --fallbacks).
+    # Only set when Conan really applied the fallback, so it can be spelled
+    # out wherever the binary is reported.
+    fallbacks: Dict[str, str] = field(default_factory=dict)
 
     @property
     def name(self) -> str:
@@ -166,6 +181,8 @@ class Report:
     root_requires: List[str]
     updates: List[Update] = field(default_factory=list)
     checked_updates: bool = True  # False when --no-check-updates skipped the check
+    # build_type -> {package name: build type checked instead} (--fallbacks)
+    fallbacks: Dict[str, Dict[str, str]] = field(default_factory=dict)
 
     def problems(self) -> List[Dep]:
         return [d for d in self.deps.values() if d.missing()]
@@ -423,17 +440,57 @@ def _paths(root) -> Dict[str, List[str]]:
     return paths
 
 
+def _load_fallbacks(path: str) -> Dict[str, Dict[str, str]]:
+    """Read the ``--fallbacks`` file: one INI section per build type.
+
+    Some packages are simply never built for every build type.  The file says
+    which build type to check instead, per package::
+
+        [RelWithDebInfo]
+        zlib = Release
+        openssl = Release
+
+        [Debug]
+        icu = Release
+
+    Returns ``{build_type: {package name: build type to check instead}}``.
+    Package names keep their case (Conan references are case sensitive), and a
+    package mapped to its own section is rejected: it would silently do
+    nothing, which is never what the line was meant to say.
+    """
+    parser = configparser.ConfigParser()
+    parser.optionxform = str  # do not lower-case package names
+    with open(path, encoding="utf-8") as fh:
+        parser.read_file(fh)
+    fallbacks: Dict[str, Dict[str, str]] = {}
+    for build_type in parser.sections():
+        for package, fallback in parser.items(build_type):
+            if not fallback or fallback == build_type:
+                raise ValueError(
+                    "%s: [%s] %s = %s: expected a different build type"
+                    % (path, build_type, package, fallback)
+                )
+            fallbacks.setdefault(build_type, {})[package] = fallback
+    return fallbacks
+
+
 def _collect(
     graph,
     build_type: str,
     deps: "OrderedDict[str, Dep]",
     ranges: Dict[str, str],
     index: _RemoteIndex,
+    fallbacks: Dict[str, str],
 ):
     """Merge one build_type's graph into ``deps``.
 
     The graph may differ between build types (conditional requirements), so we
     union nodes rather than assume the first graph is complete.
+
+    ``fallbacks`` maps a package name to the build type asked for instead of
+    ``build_type``; it is recorded on the ``Dep`` only when the node's settings
+    confirm Conan applied it, so the report never claims a fallback that did
+    not happen (a header-only package has no build_type to override).
     """
     root = graph.root
     direct = {_node_key(e.dst) for e in root.dependencies}
@@ -474,6 +531,9 @@ def _collect(
             dep.settings = {k: str(v) for k, v in node.conanfile.settings.values_list}
         except Exception:  # header-only / no settings
             dep.settings = {}
+        fallback = fallbacks.get(node.ref.name)
+        if fallback and dep.settings.get("build_type") == fallback:
+            dep.fallbacks[build_type] = fallback
         status = node.binary or "Unknown"
         package_id = node.package_id or ""
         remote = node.binary_remote.name if node.binary_remote else None
@@ -498,6 +558,7 @@ def build_report(
     verbose: bool = False,
     quiet: bool = False,
     check_updates: bool = True,
+    fallbacks: Optional[Dict[str, Dict[str, str]]] = None,
 ) -> Report:
     log = _Tee(echo=verbose)
     _progress(quiet, "loading Conan API")
@@ -509,6 +570,14 @@ def build_report(
     profile_settings: Dict[str, str] = {}
     explicit: set = set()
     index = _RemoteIndex(api, remote)
+    fallbacks = fallbacks or {}
+    # A section for a build type that is not being checked is dead config,
+    # almost always a typo - say so rather than quietly ignoring it.
+    unused = sorted(set(fallbacks) - set(build_types))
+    if unused:
+        _progress(
+            quiet, "WARN: fallbacks for build types that are not checked: %s" % ", ".join(unused)
+        )
 
     total = len(build_types)
     for i, bt in enumerate(build_types, 1):
@@ -518,16 +587,19 @@ def build_report(
             % (i, total, bt, remote or "all remotes"),
         )
         t0 = time.monotonic()
+        # A fallback is just a package-scoped setting, the same thing you would
+        # write in a profile, so Conan computes the package_id for it.
+        scoped = ["%s:build_type=%s" % (p, f) for p, f in sorted(fallbacks.get(bt, {}).items())]
         graph, root_conanfile = api.info(
             conanfile,
             remote_name=remote,
-            settings=list(settings) + ["build_type=%s" % bt],
+            settings=list(settings) + ["build_type=%s" % bt] + scoped,
             options=list(options) or None,
             profile_names=profiles or None,
             update=update,
         )
         explicit |= _explicit_overrides(graph)
-        _collect(graph, bt, deps, ranges, index)
+        _collect(graph, bt, deps, ranges, index, fallbacks.get(bt, {}))
         missing = sum(1 for d in deps.values() if d.binaries.get(bt, ("",))[0] in _PROBLEM)
         _progress(
             quiet,
@@ -572,6 +644,7 @@ def build_report(
         root_requires,
         updates,
         check_updates,
+        fallbacks,
     )
 
 
@@ -787,16 +860,29 @@ def _table(headers: List[str], rows: List[List[str]], pal: _Palette) -> List[str
     return lines
 
 
-def _cell(status: str, _package_id: str, remote: Optional[str], pal: _Palette) -> str:
-    """Cell text: the remote that has the binary, or why it is not available."""
+def _cell(
+    status: str,
+    _package_id: str,
+    remote: Optional[str],
+    pal: _Palette,
+    fallback: Optional[str] = None,
+) -> str:
+    """Cell text: the remote that has the binary, or why it is not available.
+
+    ``fallback`` is the build type that was actually resolved for this package
+    (see ``--fallbacks``).  It is always appended, for a found binary as well
+    as a missing one, so a cell can never be read as a binary for the column's
+    own build type.
+    """
     if status == "Remote":
-        return pal.ok(remote or "remote")
-    text = _MARK.get(status, status)
-    if status == "Missing":
-        return pal.bad(text)
-    if status == "CacheOnly":
-        return pal.warn(text)
-    return pal.dim(text)
+        text = pal.ok(remote or "remote")
+    elif status == "Missing":
+        text = pal.bad(_MARK[status])
+    elif status == "CacheOnly":
+        text = pal.warn(_MARK[status])
+    else:
+        text = pal.dim(_MARK.get(status, status))
+    return (text + pal.dim(" (via %s)" % fallback)) if fallback else text
 
 
 def _override_kind(o: Override) -> str:
@@ -806,6 +892,20 @@ def _override_kind(o: Override) -> str:
 def _date(ts: Optional[int]) -> str:
     """Export timestamp as a UTC date, '?' when the manifest could not be read."""
     return time.strftime("%Y-%m-%d", time.gmtime(ts)) if ts else "?"
+
+
+def _resolved_bt(dep: Dep, build_type: str) -> str:
+    """Label a build type with the fallback that was checked instead, if any."""
+    fallback = dep.fallbacks.get(build_type)
+    return "%s (via %s)" % (build_type, fallback) if fallback else build_type
+
+
+def _fallback_summary(fallbacks: Dict[str, Dict[str, str]]) -> str:
+    """The configured fallbacks on one line, for the report header."""
+    return "; ".join(
+        "%s: %s" % (bt, ", ".join("%s -> %s" % (p, f) for p, f in sorted(pkgs.items())))
+        for bt, pkgs in sorted(fallbacks.items())
+    )
 
 
 def _via(dep: Dep, arrow: str = " -> ", newline: str = "\n") -> str:
@@ -842,8 +942,11 @@ def render_text(report: Report, color: bool = False) -> str:
     out: List[str] = []
     w = out.append
     w(pal.bold("conandeps report for %s" % report.conanfile))
-    w("remote : %s" % (report.remote or "(all configured remotes)"))
-    w("profile: " + ", ".join("%s=%s" % kv for kv in report.profile.items()))
+    # Labels are padded to the longest one so the header reads as a block.
+    w("remote   : %s" % (report.remote or "(all configured remotes)"))
+    w("profile  : " + ", ".join("%s=%s" % kv for kv in report.profile.items()))
+    if report.fallbacks:
+        w("fallbacks: " + _fallback_summary(report.fallbacks))
     w("")
 
     # ---- dependencies ----------------------------------------------------
@@ -858,7 +961,7 @@ def render_text(report: Report, color: bool = False) -> str:
         if report.checked_updates:
             u = newest.get(dep.ref)
             row.append(pal.warn(_newest(u)) if u else pal.ok(_newest(u)))
-        row += [_cell(*dep.binaries[bt], pal) for bt in report.build_types]
+        row += [_cell(*dep.binaries[bt], pal, dep.fallbacks.get(bt)) for bt in report.build_types]
         rows.append(row)
     headers = ["package", "via", "ctx"]
     if report.checked_updates:
@@ -902,7 +1005,7 @@ def render_text(report: Report, color: bool = False) -> str:
                     if status == "CacheOnly"
                     else pal.bad("no binary anywhere")
                 )
-                rows.append([dep.ref, bt, pid, reason])
+                rows.append([dep.ref, _resolved_bt(dep, bt), pid, reason])
         out.extend(_table(["package", "build type", "package_id", "reason"], rows, pal))
     else:
         w(pal.ok("All packages have binaries on the remote for: " + ", ".join(report.build_types)))
@@ -1011,11 +1114,14 @@ def render_html(report: Report) -> str:
     w("<title>conandeps: %s</title><style>%s</style></head><body>" % (e(report.conanfile), _CSS))
     w("<h1>conandeps report</h1>")
     w(
-        "<p><b>conanfile:</b> %s<br><b>remote:</b> %s<br><b>profile:</b> %s</p>"
+        "<p><b>conanfile:</b> %s<br><b>remote:</b> %s<br><b>profile:</b> %s%s</p>"
         % (
             e(report.conanfile),
             e(report.remote or "(all configured remotes)"),
             e(", ".join("%s=%s" % kv for kv in report.profile.items())),
+            "<br><b>fallbacks:</b> %s" % e(_fallback_summary(report.fallbacks))
+            if report.fallbacks
+            else "",
         )
     )
 
@@ -1040,7 +1146,7 @@ def render_html(report: Report) -> str:
         for bt in report.build_types:
             status, pid, remote = dep.binaries[bt]
             cls = {"Remote": "ok", "Missing": "missing", "CacheOnly": "cacheonly"}.get(status, "na")
-            text = e(_cell(status, pid, remote, _Palette(False)))
+            text = e(_cell(status, pid, remote, _Palette(False), dep.fallbacks.get(bt)))
             row.append('<span class="%s" title="package_id %s">%s</span>' % (cls, e(pid), text))
         rows.append(row)
     headers = ["package", "via", "context"]
@@ -1080,7 +1186,9 @@ def render_html(report: Report) -> str:
                     if status == "CacheOnly"
                     else '<span class="missing">no binary anywhere</span>'
                 )
-                rows.append([e(dep.ref), e(bt), "<code>%s</code>" % e(pid), reason])
+                rows.append(
+                    [e(dep.ref), e(_resolved_bt(dep, bt)), "<code>%s</code>" % e(pid), reason]
+                )
         w(_html_table(["package", "build type", "package_id", "reason"], rows))
     else:
         w(
@@ -1194,6 +1302,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         action="store_true",
         help="do not check the remote for newer versions of each package",
     )
+    p.add_argument(
+        "--fallbacks",
+        metavar="FILE",
+        help="INI file naming, per build type, the packages to check under another "
+        "build type instead (e.g. [RelWithDebInfo] with 'zlib = Release')",
+    )
     p.add_argument("--html", metavar="FILE", help="also write an HTML report to FILE")
     p.add_argument(
         "-v", "--verbose", action="store_true", help="stream Conan's own output to stderr live"
@@ -1212,6 +1326,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     build_types = [b.strip() for b in args.build_types.split(",") if b.strip()]
     try:
+        fallbacks = _load_fallbacks(args.fallbacks) if args.fallbacks else {}
         report = build_report(
             args.conanfile,
             args.remote,
@@ -1223,8 +1338,9 @@ def main(argv: Optional[List[str]] = None) -> int:
             args.verbose,
             args.quiet,
             check_updates=not args.no_check_updates,
+            fallbacks=fallbacks,
         )
-    except Exception as exc:  # ConanException and friends
+    except Exception as exc:  # bad --fallbacks file, ConanException and friends
         sys.stderr.write("conandeps: error: %s\n" % exc)
         return 2
 

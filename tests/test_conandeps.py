@@ -279,7 +279,7 @@ def test_via_lists_every_parent_path():
     ]
 
 
-def _mini_report(deps, overrides=(), updates=(), checked_updates=True):
+def _mini_report(deps, overrides=(), updates=(), checked_updates=True, fallbacks=None):
     """Hand-built single-build-type Report for renderer ordering tests."""
     return conandeps.Report(
         "conanfile.py",
@@ -292,14 +292,17 @@ def _mini_report(deps, overrides=(), updates=(), checked_updates=True):
         [],
         list(updates),
         checked_updates,
+        dict(fallbacks or {}),
     )
 
 
-def _mini_dep(ref, direct=False, paths=(), status="Remote", requires=()):
+def _mini_dep(ref, direct=False, paths=(), status="Remote", requires=(), fallback=None):
     dep = conandeps.Dep(ref=ref, context="host", direct=direct)
     dep.paths = [list(p) for p in paths]
     dep.requires = list(requires)
     dep.binaries = {"Release": (status, "f" * 40, "test" if status == "Remote" else None)}
+    if fallback:
+        dep.fallbacks = {"Release": fallback}
     return dep
 
 
@@ -508,6 +511,86 @@ def test_missing_binaries(report):
                 assert status == "Remote", (dep.ref, bt, status)
                 assert remote == "test"
                 assert pid
+
+
+def test_fallback_file_parsing(tmp_path):
+    """One section per build type; package names keep their case."""
+    ini = tmp_path / "fallbacks.ini"
+    ini.write_text(
+        "# packages we never build for every type\n"
+        "[RelWithDebInfo]\n"
+        "MyDepA = Release\n"
+        "zlib = Release\n"
+    )
+    assert conandeps._load_fallbacks(str(ini)) == {
+        "RelWithDebInfo": {"MyDepA": "Release", "zlib": "Release"}
+    }
+    # A package mapped to its own build type would do nothing at all.
+    ini.write_text("[Release]\nzlib = Release\n")
+    with pytest.raises(ValueError):
+        conandeps._load_fallbacks(str(ini))
+
+
+def test_fallback_is_spelled_out_in_both_renderers():
+    """A binary found under a fallback never reads as one for the column itself."""
+    deps = {
+        "zlib#host": _mini_dep("zlib/1.2", direct=True, fallback="Debug"),
+        "icu#host": _mini_dep("icu/70", direct=True, status="Missing", fallback="Debug"),
+    }
+    report = _mini_report(deps, fallbacks={"Release": {"zlib": "Debug", "icu": "Debug"}})
+
+    text = conandeps.render_text(report)
+    # Header labels line up: "remote   :", "profile  :", "fallbacks:".
+    assert "\nfallbacks: Release: icu -> Debug, zlib -> Debug\n" in text
+    assert re.search(r"^zlib/1\.2\s+-\s+host\s+up to date\s+test \(via Debug\)$", text, re.M)
+    # A fallback without a binary either is still missing, and the row says
+    # which build type was actually looked for.
+    assert re.search(r"^icu/70\s+Release \(via Debug\)\s+f+\s+no binary anywhere$", text, re.M)
+
+    page = conandeps.render_html(report)
+    assert "<b>fallbacks:</b> Release: icu -&gt; Debug, zlib -&gt; Debug" in page
+    assert ">test (via Debug)</span>" in page
+    assert "<td>Release (via Debug)</td>" in page
+
+
+def test_fallback_build_types(conan_env, tmp_path):
+    """libbar has Release binaries only; a fallback file makes that acceptable.
+
+    The fallback is handed to Conan as ``libbar:build_type=Release``, so all
+    three columns end up on the very same package_id - the Release binary -
+    and libbar drops out of the missing-binaries report and the exit code.
+    """
+    ini = tmp_path / "fallbacks.ini"
+    ini.write_text("[Debug]\nlibbar = Release\n\n[RelWithDebInfo]\nlibbar = Release\n")
+    fallbacks = conandeps._load_fallbacks(str(ini))
+
+    report = conandeps.build_report(
+        conan_env["conanfile"],
+        "test",
+        [],
+        [],
+        [],
+        list(BUILD_TYPES),
+        update=False,
+        quiet=True,
+        check_updates=False,
+        fallbacks=fallbacks,
+    )
+    libbar = report.deps["libbar#host"]
+    assert libbar.missing() == []
+    assert libbar.fallbacks == {"Debug": "Release", "RelWithDebInfo": "Release"}
+    assert len({pid for _, pid, _ in libbar.binaries.values()}) == 1  # one binary, three columns
+    assert report.problems() == []
+    assert not report.deps["libfoo#host"].fallbacks  # only the listed package moves
+
+    text = conandeps.render_text(report)
+    assert re.search(r"^libbar/1\.1\s+libfoo\s+host\s+test\s+test \(via Release\)", text, re.M)
+    assert "All packages have binaries on the remote" in text
+
+    rc = conandeps.main(
+        [conan_env["conanfile"], "-r", "test", "--no-check-updates", "--fallbacks", str(ini), "-q"]
+    )
+    assert rc == 0  # the known, accepted gap no longer fails CI
 
 
 def test_cache_only_is_not_available(conan_env):

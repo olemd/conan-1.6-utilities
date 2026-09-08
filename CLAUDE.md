@@ -53,6 +53,15 @@ Users install/upgrade on their own machine with
   replace this with settings-dict matching against `conan search` output.
 - **"Missing" means missing for the exact profile.** Not "no binary with
   that build_type at all".
+- **Build-type fallbacks are package-scoped settings, not report filtering.**
+  `--fallbacks` (`_load_fallbacks`, INI, one section per build type) is turned
+  into `-s <pkg>:build_type=<fallback>` for that build type's `api.info()`
+  call, so Conan computes the fallback package_id and any knock-on effect on
+  consumers. Nothing is subtracted from `Dep.missing()`: a listed package
+  drops out of the missing-binaries report only because its binary was really
+  found. `Dep.fallbacks[bt]` is recorded only when the node's own settings
+  confirm Conan applied it, and both renderers append `(via <bt>)` to every
+  affected cell so a fallback can never be read as a real binary.
 - **Dependency table shows the shortest path, not a level number.**
   `_paths()` does a breadth-first walk from the root; `Dep.path` is the list
   of package names on the *shortest* path (empty = direct, so a package that
