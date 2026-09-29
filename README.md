@@ -12,6 +12,7 @@ Licensed under the [MIT License](LICENSE).
 | Tool | What it does |
 |------|--------------|
 | [`conandeps`](#conandeps) | Lists direct/indirect dependencies, checks which build types have binaries on a remote for your exact profile, shows requirement overrides and reports packages with a newer version on the remote. |
+| [`conansbom`](#conansbom) | Writes a CycloneDX SBOM of a conanfile's dependency graph: every package with its purl and declared license, build tools marked as not shipped. |
 
 ## conandeps
 
@@ -41,7 +42,8 @@ Given a `conanfile.py`, `conandeps` tells you four things in one report:
 ### Installation
 
 Requires Python 3.8 or newer. Install with [uv](https://docs.astral.sh/uv/)
-or with [pip](#with-pip).
+or with [pip](#with-pip). Installing the package gives you both commands,
+`conandeps` and [`conansbom`](#conansbom).
 
 #### With uv
 
@@ -338,6 +340,64 @@ Conan 1.x does not keep override information on the graph object; the only
 trace is a `WARN: <pkg>: requirement A overridden by B to C` line written while
 the graph is resolved. The tool captures Conan's output stream during graph
 construction and parses those lines. A test pins the message format.
+
+## conansbom
+
+Writes a [CycloneDX](https://cyclonedx.org/) 1.6 JSON software bill of
+materials for a `conanfile.py`, for inventory and license compliance – for
+example to hand to a customer or to load into Dependency-Track.
+
+```bash
+conansbom path/to/conanfile.py -r myremote --out sbom.json
+conansbom path/to/conanfile.py -pr myprofile -s build_type=Debug > sbom.json
+```
+
+| Option | Meaning |
+|--------|---------|
+| `CONANFILE` | Path to `conanfile.py` (or a directory containing one). |
+| `-r`, `-pr`, `-s`, `-o`, `-u` | As for `conandeps`: remote, profile, settings, options, `conan -u`. |
+| `--out FILE` | Write the SBOM to `FILE`. Default: stdout. |
+| `-v` | Stream Conan's own output to stderr live. |
+
+An SBOM describes one concrete build, so there is no build-type matrix: pass
+the profile and settings you ship with. Exit status: `0` SBOM written, `2`
+Conan failed to build the graph.
+
+What is in it:
+
+* **The project is the subject** (`metadata.component`), with the name,
+  version and license its conanfile declares, and the profile's settings as
+  properties, so the document says which build it describes.
+* **Every package in the graph is one component**: name, version,
+  [purl](https://github.com/package-url/purl-spec)
+  (`pkg:conan/zlib@1.3`, with `user`/`channel` qualifiers when the package
+  has them), description, homepage (`website`) and recipe repository (`vcs`).
+* **Licenses exactly as the recipe declares them**, marked
+  `acknowledgement: declared`. Nothing is guessed or mapped. Packages whose
+  recipe declares no license are listed on stderr –
+  `conansbom: WARN: no license declared: …` – since those are the ones a
+  compliance review has to chase.
+* **What ships and what only builds it.** A package the project reaches
+  without crossing a build requirement has `scope: required`. A build
+  requirement, and everything only it pulls in, has `scope: excluded`
+  (CycloneDX's term for "used, but not delivered"). A package used both ways
+  ships, so it is `required`. It is still one component, with its Conan
+  contexts and each context's package_id as properties.
+* **The full dependency graph**, build-requirement edges included.
+
+Components are sorted by reference, so two SBOMs of the same project diff
+cleanly.
+
+Why a tool of its own: SBOM generators that read a Conan 1 lockfile, such
+as Syft, cannot report licenses – the lockfile does not record them – and do
+not tell build tools from what ships. cyclonedx-conan, which did read Conan 1
+recipes, was archived in 2023, and Conan's built-in SBOM support is Conan 2
+only. `conansbom` reads the same graph `conan install` resolves, with the
+recipes already loaded.
+
+`conansbom` shares its Conan plumbing with `conandeps`, so unlike
+`conandeps.py` it cannot be run as a lone downloaded file. It works installed
+or from a checkout (`uv run conansbom.py …`).
 
 ## Releases
 

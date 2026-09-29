@@ -6,8 +6,9 @@ project was started (August 2026) that are not obvious from the code.
 ## What this is
 
 Small single-file Python utilities for **Conan 1.x, targeting 1.66**. Not
-Conan 2. The first (and so far only) tool is `conandeps.py`; see `README.md`
-for what it does and how it is used.
+Conan 2. The tools are `conandeps.py` (dependency/binary report) and
+`conansbom.py` (CycloneDX SBOM); see `README.md` for what they do and how
+they are used.
 
 ## Commands (all inside the container)
 
@@ -142,9 +143,14 @@ pip works too (plain PEP 517, documented in the README). pip upgrades need
 - **`range_ref` is not a version range after an override.** Conan reuses
   `Requirement.range_ref` to hold the pre-override reference, so only treat
   it as a range when `req.version_range` is truthy.
-- **Single file, stdlib + Conan only.** No third-party deps beyond Conan.
-  Packaging is hatchling with `only-include = ["conandeps.py"]`; the PEP 723
-  header makes the file usable via `uv run conandeps.py` without a checkout.
+- **Single file, stdlib + Conan only.** No third-party runtime deps beyond
+  Conan (dev/test deps are fine). Packaging is hatchling with `only-include`
+  listing each tool file; the PEP 723 header makes `conandeps.py` usable via
+  `uv run conandeps.py` without a checkout. `conansbom.py` imports
+  `conandeps` for the Conan plumbing (`_make_api`, `_Tee`, `_root_ref`,
+  `_resolve_graph`) – the user chose one graph implementation over
+  standalone files – so it runs installed or from a checkout only.
+  `_resolve_graph` is the one place any tool calls `api.info()`.
 - **Exit codes:** `0` fine, `1` missing binaries, `2` Conan error. CI relies
   on this.
 - **Tables and colour, consistently.** The text missing-binaries table uses
@@ -177,7 +183,9 @@ pip works too (plain PEP 517, documented in the README). pip upgrades need
   fixture-free unit test on hand-built `Dep` objects, like
   `test_via_lists_every_parent_path` – instant, and no `conan_server`.
 - Dependencies: `uv.lock` is committed; regenerate with `./dev.sh uv lock`
-  after changing `pyproject.toml`.
+  after changing `pyproject.toml`. The container installs dev tools with pip
+  from the `Containerfile`, not from the dev group, so a new dev dependency
+  goes in **both** and needs `./dev.sh build`.
 - Commits: atomic, no `--amend`; run ruff + pytest + shellcheck before
   committing. Add a memory of anything a future session could not derive
   from the repository.
@@ -189,10 +197,41 @@ pip works too (plain PEP 517, documented in the README). pip upgrades need
   `fj release` does **not** accept `--repo`. Then update the "Latest:" line
   in the README's Releases section and delete `dist/`.
 
+## conansbom design decisions (and why)
+
+- **Own tool, CycloneDX only.** Checked 2026-09-29: Syft on a Conan 1
+  lockfile works but the lockfile has no license field and Syft does not
+  mark build requirements (duplicate purls, no scope); cyclonedx-conan is
+  archived; Conan's SBOM tool is Conan 2 only. The user needs inventory
+  *and* customer-facing license compliance and chose CycloneDX only (no
+  SPDX until a customer asks).
+- **One build, one graph.** An SBOM describes a concrete build: one
+  `_resolve_graph` call with the given profile/settings, no build-type
+  matrix, no remote binary checks.
+- **Scope is reachability, not context.** `required` = reachable from the
+  root without crossing a `build_require` edge (`_runtime_nodes`), else
+  `excluded`. This works with or without a build profile and puts a build
+  tool's own requirements on the build side.
+- **One component per reference.** A ref in both contexts is merged (it
+  ships → `required`), contexts and per-context package_ids are
+  properties. Two components with one purl break Dependency-Track.
+- **Licenses as declared, never mapped.** Each is `license.name` with
+  `acknowledgement: declared`. Emitting `license.id` would need the SPDX list
+  (the schema enumerates it) and would be guessing; unlicensed refs are
+  listed on stderr, never a non-zero exit (a `--require-licenses` flag is
+  the natural extension if CI wants one).
+- **purl per the spec's conan type**: `pkg:conan/name@version`, `user` and
+  `channel` as sorted qualifiers; the purl is the bom-ref. An unnamed
+  project has no purl and bom-ref `project`.
+- **Every document is schema-validated in the tests** with
+  `cyclonedx-python-lib`'s `JsonStrictValidator` (V1_6). Keep that for any
+  output change.
+
 ## Adding another tool
 
-Follow the `conandeps.py` pattern: one executable file with a module
+Follow the `conandeps.py`/`conansbom.py` pattern: one executable file with a module
 docstring explaining *how* and *why*, a PEP 723 header, a `main(argv)` that
 returns an exit code, a `[project.scripts]` entry, an `only-include` entry in
-`pyproject.toml`, tests under `tests/` using the shared `conan_env` fixture,
+`pyproject.toml`, tests under `tests/` using the shared `conan_env` fixture
+(`tests/conftest.py`), graph resolution through `conandeps._resolve_graph`,
 and a section in `README.md`.

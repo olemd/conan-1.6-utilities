@@ -11,17 +11,20 @@ dependencies = ["conan>=1.66,<2"]
 
 [project.scripts]
 conandeps = "conandeps:main"
+conansbom = "conansbom:main"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
-# Single-module layout: ship conandeps.py itself, not a package directory.
+# Single-module layout: ship the tool files themselves, not a package directory.
 [tool.hatch.build.targets.wheel]
-only-include = ["conandeps.py"]
+only-include = ["conandeps.py", "conansbom.py"]
 
 [dependency-groups]
-dev = ["pytest", "ruff"]
+# cyclonedx-python-lib validates conansbom output against the CycloneDX schema
+# in the tests only; the tools themselves stay stdlib + Conan.
+dev = ["cyclonedx-python-lib[json-validation]", "pytest", "ruff"]
 
 [tool.ruff]
 target-version = "py38"
