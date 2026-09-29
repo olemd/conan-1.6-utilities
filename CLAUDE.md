@@ -44,8 +44,8 @@ pip works too (plain PEP 517, documented in the README). pip upgrades need
 - **Never depend on the private remote.** The user's real remote only
   exists on the machine where the tool is used and must not be named in the
   repository – use a placeholder such as `myremote` in docs and help text.
-  Tests must use the local `conan_server` fixture in
-  `tests/test_conandeps.py`.
+  Tests must use the local `conan_server` fixture (`conan_env`) in
+  `tests/conftest.py`, shared by every tool's tests.
 
 ## Design decisions (and why)
 
