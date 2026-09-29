@@ -40,8 +40,10 @@ Given a `conanfile.py`, `conandeps` tells you four things in one report:
 
 ### Installation
 
-Requires Python 3.8 or newer. With
-[uv](https://docs.astral.sh/uv/):
+Requires Python 3.8 or newer. Install with [uv](https://docs.astral.sh/uv/)
+or with [pip](#with-pip).
+
+#### With uv
 
 ```bash
 # As a command on your PATH, in its own venv with Conan 1.66:
@@ -53,6 +55,44 @@ conandeps path/to/conanfile.py -r myremote
 # Or run the single file directly, no checkout needed (PEP 723 inline metadata):
 uv run conandeps.py path/to/conanfile.py -r myremote
 ```
+
+Upgrade with `uv tool upgrade conan-utils`.
+
+#### With pip
+
+The package pulls in `conan>=1.66,<2`, so install it into a virtual
+environment of its own. Otherwise it would replace or downgrade a Conan that
+is already installed in the same environment:
+
+```bash
+python3 -m venv ~/.venvs/conan-utils
+~/.venvs/conan-utils/bin/pip install git+https://kode.naiv.no/olemd/conan-1.6-utilities.git
+# with an SSH key:     ... pip install git+ssh://git@kode.naiv.no:2222/olemd/conan-1.6-utilities.git
+# without git:         ... pip install https://kode.naiv.no/olemd/conan-1.6-utilities/archive/main.tar.gz
+# from a checkout:     ... pip install .
+~/.venvs/conan-utils/bin/conandeps path/to/conanfile.py -r myremote
+```
+
+Either put `~/.venvs/conan-utils/bin` on your `PATH`, or symlink just the
+command:
+`ln -s ~/.venvs/conan-utils/bin/conandeps ~/.local/bin/`.
+
+If you already build with Conan 1.66 from a venv, you can install into that
+venv instead. pip sees that the Conan requirement is already met and leaves
+Conan alone.
+
+To upgrade, add `--force-reinstall --no-deps`:
+
+```bash
+~/.venvs/conan-utils/bin/pip install --force-reinstall --no-deps \
+    git+https://kode.naiv.no/olemd/conan-1.6-utilities.git
+```
+
+A plain `pip install --upgrade` compares only the version number. Not every
+pushed commit bumps it, so a plain upgrade can report success and still leave
+the old code installed.
+
+#### Conan configuration
 
 The tool's venv carries its own Conan 1.66 and does not touch the Conan you
 build with, but it reads the same `~/.conan` configuration: profiles,
@@ -294,6 +334,10 @@ Install a specific release with
 uv tool install git+https://kode.naiv.no/olemd/conan-1.6-utilities.git@v0.1.0
 # or, from the downloaded wheel:
 uv tool install conan_utils-0.1.0-py3-none-any.whl
+
+# the same with pip, inside the venv from "With pip" above:
+pip install git+https://kode.naiv.no/olemd/conan-1.6-utilities.git@v0.1.0
+pip install conan_utils-0.1.0-py3-none-any.whl
 ```
 
 To cut a release: bump `version` in `pyproject.toml`, push an annotated tag

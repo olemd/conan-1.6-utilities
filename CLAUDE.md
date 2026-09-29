@@ -22,6 +22,9 @@ shellcheck dev.sh                    # after editing the wrapper (runs on host)
 Users install/upgrade on their own machine with
 `uv tool install git+https://kode.naiv.no/olemd/conan-1.6-utilities.git` /
 `uv tool upgrade conan-utils`; a pushed commit is immediately installable.
+pip works too (plain PEP 517, documented in the README). pip upgrades need
+`--force-reinstall --no-deps`, because `--upgrade` skips a git URL whose
+`version` is unchanged.
 
 ## Hard constraints
 
