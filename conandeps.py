@@ -239,6 +239,31 @@ def _make_api(log: _Tee):
     return ConanAPIV1(output=ConanOutput(log, log, color=False))
 
 
+def _resolve_graph(
+    api,
+    conanfile: str,
+    remote: Optional[str],
+    profiles: List[str],
+    settings: List[str],
+    options: List[str],
+    update: bool,
+):
+    """Build the dependency graph the way ``conan install`` would.
+
+    Returns ``(graph, root conanfile)``.  The one place every tool in this
+    repository asks Conan for a graph, so ``-pr``/``-s``/``-o``/``-r`` mean
+    the same thing everywhere.
+    """
+    return api.info(
+        conanfile,
+        remote_name=remote,
+        settings=list(settings),
+        options=list(options) or None,
+        profile_names=profiles or None,
+        update=update,
+    )
+
+
 def _node_key(node) -> str:
     return "%s#%s" % (node.ref.name, node.context)
 
@@ -613,13 +638,14 @@ def build_report(
         # A fallback is just a package-scoped setting, the same thing you would
         # write in a profile, so Conan computes the package_id for it.
         scoped = ["%s:build_type=%s" % (p, f) for p, f in sorted(fallbacks.get(bt, {}).items())]
-        graph, root_conanfile = api.info(
+        graph, root_conanfile = _resolve_graph(
+            api,
             conanfile,
-            remote_name=remote,
-            settings=list(settings) + ["build_type=%s" % bt] + scoped,
-            options=list(options) or None,
-            profile_names=profiles or None,
-            update=update,
+            remote,
+            profiles,
+            list(settings) + ["build_type=%s" % bt] + scoped,
+            options,
+            update,
         )
         explicit |= _explicit_overrides(graph)
         _collect(graph, bt, deps, ranges, index, fallbacks.get(bt, {}))
