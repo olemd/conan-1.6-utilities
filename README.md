@@ -45,6 +45,16 @@ or with [pip](#with-pip).
 
 #### With uv
 
+No uv yet? See the
+[uv installation guide](https://docs.astral.sh/uv/getting-started/installation/)
+for all platforms; on Linux and macOS it is one line:
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+Then:
+
 ```bash
 # As a command on your PATH, in its own venv with Conan 1.66:
 uv tool install git+https://kode.naiv.no/olemd/conan-1.6-utilities.git
