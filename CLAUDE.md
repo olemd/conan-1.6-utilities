@@ -73,13 +73,17 @@ pip works too (plain PEP 517, documented in the README). pip upgrades need
   "all paths". The `via` column renders them one per line as `A -> B`
   (`→`/`<br>` in HTML); `_table()` supports multi-line cells. The HTML
   renderer sorts dependency rows on (via, name) via `_dep_key` so each chain
-  reads as a block, and puts overrides before missing binaries.
+  reads as a block.
   `report.deps` itself keeps (depth, path, host before build, name) order –
   the tree section and `problems()` rely on it. The tree keeps graph order.
-- **Tree tags are typed.** `_tree_rows()` yields `(head, [(kind, text)], tail)`
-  with kinds path/build-require/override/range/missing; the HTML renderer
-  colours by kind (`<span class=…>`) from that one source. Add new tree annotations there, never
-  by string-replacing rendered lines.
+- **The HTML report says each thing once.** The dependency table is the
+  one place for per-package facts: availability cells (package_id as
+  tooltip), `newest` (update note and both export dates as tooltip) and the
+  version range (package cell tooltip). There is deliberately no HTML
+  "Missing binaries" or "Newer versions" section, and `_tree_rows()` yields
+  plain structure lines with no tags. The user asked for this to cut
+  duplication; do not add annotations back to the tree or a section that
+  repeats table cells. (The text summary keeps its missing-binaries list.)
 - **Only the remote counts, and the source is always shown.** Conan says
   `Cache` for a locally cached binary without asking the remote, so
   `_RemoteIndex` verifies cache hits with `search_packages` on the remote.
@@ -108,8 +112,8 @@ pip works too (plain PEP 517, documented in the README). pip upgrades need
 - **The text output is a summary; the HTML report is the report.** The user
   reads the HTML one, so `render_text` is the header, `_summary()` (one line
   of counts) and the missing binaries – nothing else, and no package_id
-  column. Everything else (dependency table, overrides, newer versions,
-  update order, tree) is HTML-only; do not add a section back to the text
+  column. Everything else (dependency table with the newest versions,
+  overrides, update order, tree) is HTML-only; do not add a section back to the text
   report. `main()` prints `Full report: --html FILE` when `--html` was not
   used. Renderer tests therefore assert on HTML, except for the summary and
   the missing-binaries table.

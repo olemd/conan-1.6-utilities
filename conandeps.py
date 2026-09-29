@@ -17,8 +17,8 @@ Given a conanfile.py this tool:
     being reported as a missing binary,
   * reports every requirement override - explicit ``override=True`` ones as
     well as implicit ones where a downstream consumer simply asks for a newer
-    version than a transitive dependency declared - as a hierarchy showing who
-    asked for what and which version won,
+    version than a transitive dependency declared - showing who asked for
+    what and which version won,
   * checks whether the remote holds a newer version of each package (same
     user/channel).  Versions are ordered with Conan's lenient ``Version``
     (which copes with dates and most non-semver schemes); because some
@@ -53,8 +53,9 @@ emitted by ``Requirements.update()``.  We therefore capture Conan's output
 stream while the graph is built and parse those lines.
 
 The terminal output is a summary - the header, one line of counts and the
-missing binaries.  The full report (dependency table, overrides, newer
-versions, update order, tree) is the HTML one written by ``--html``.
+missing binaries.  The full report (dependency table with availability and
+newest versions, overrides, update order, tree) is the HTML one written by
+``--html``.
 
 Targets Conan 1.66.  Uses only the standard library plus the Conan API.
 """
@@ -685,59 +686,36 @@ _MARK = {
 }
 
 
-# A tree line is (text before tags, [(tag kind, tag text)], text after tags).
-# Kinds: path, build-require, override, range, missing.  Renderers colour by
-# kind; the words are identical in text and HTML.
-_TreeLine = Tuple[str, List[Tuple[str, str]], str]
+def _tree_rows(report: Report) -> List[str]:
+    """Build the dependency hierarchy as indented lines, structure only.
 
-
-def _tree_rows(report: Report) -> List[_TreeLine]:
-    """Build the dependency hierarchy as indented rows with typed tags."""
+    Deliberately carries no annotations: paths, context, overrides, version
+    ranges and missing binaries are all in the report's tables already, and
+    repeating them here made the tree the noisiest part of the page.
+    """
     by_name = {}
     for dep in report.deps.values():
         by_name.setdefault(dep.name, dep)  # host first (insertion order), build ok as fallback
-    # (parent ref, child name) -> Override, so the tree can annotate the exact
-    # edge whose requirement was rewritten.
-    edge_overrides = {(o.package, o.old.split("/", 1)[0]): o for o in report.overrides}
-    rows: List[_TreeLine] = []
+    rows: List[str] = []
 
-    def walk(name: str, parent: str, prefix: str, last: bool, seen: Tuple[str, ...]):
+    def walk(name: str, prefix: str, last: bool, seen: Tuple[str, ...]):
         dep = by_name.get(name)
         branch = "`-- " if last else "|-- "
         if dep is None:
-            rows.append((prefix + branch + name, [], "  (not in graph)"))
+            rows.append(prefix + branch + name + "  (not in graph)")
             return
-        tags: List[Tuple[str, str]] = []
-        if seen:  # indirect: spell out this branch's path so indentation need not be counted
-            tags.append(("path", " -> ".join(seen + (name,))))
-        if dep.build_require:
-            tags.append(("build-require", "build-require"))
-        ov = edge_overrides.get((parent, name))
-        if ov:
-            tags.append(
-                (
-                    "override",
-                    "overrides %s (%s by %s)"
-                    % (ov.old, "explicit" if ov.explicit else "implicit", ov.by),
-                )
-            )
-        if dep.ref in report.ranges:
-            tags.append(("range", "from %s" % report.ranges[dep.ref]))
-        missing = dep.missing()
-        if missing:
-            tags.append(("missing", "MISSING: " + ",".join(missing)))
         if name in seen:
-            rows.append((prefix + branch + dep.ref, tags, "  (cycle)"))
+            rows.append(prefix + branch + dep.ref + "  (cycle)")
             return
-        rows.append((prefix + branch + dep.ref, tags, ""))
+        rows.append(prefix + branch + dep.ref)
         child_prefix = prefix + ("    " if last else "|   ")
         for i, child in enumerate(dep.requires):
-            walk(child, dep.ref, child_prefix, i == len(dep.requires) - 1, seen + (name,))
+            walk(child, child_prefix, i == len(dep.requires) - 1, seen + (name,))
 
     roots = [d.name for d in report.deps.values() if d.direct]
-    rows.append((report.conanfile, [], ""))
+    rows.append(report.conanfile)
     for i, name in enumerate(roots):
-        walk(name, "your conanfile", "", i == len(roots) - 1, ())
+        walk(name, "", i == len(roots) - 1, ())
     return rows
 
 
@@ -952,10 +930,6 @@ def _override_key(o: Override):
     return (o.package.lower(), o.old.lower())
 
 
-def _update_key(u: Update):
-    return u.ref.lower()
-
-
 def _plural(n: int, singular: str, plural: Optional[str] = None) -> str:
     return "%d %s" % (n, singular if n == 1 else (plural or singular + "s"))
 
@@ -992,11 +966,11 @@ def _header(report: Report, with_conanfile: bool = False) -> List[Tuple[str, str
 def render_text(report: Report, color: bool = False) -> str:
     """The terminal report: the header, a one-line count and the problems.
 
-    Everything else - the dependency table, the overrides, the newer
-    versions, the update order and the tree - is in the HTML report, which is
-    where the detail is meant to be read.  What is left is short enough to
-    scan in a CI log, where the only question is what is missing, and it
-    matches the exit code exactly.
+    Everything else - the dependency table with each package's newest
+    version, the overrides, the update order and the tree - is in the HTML
+    report, which is where the detail is meant to be read.  What is left is
+    short enough to scan in a CI log, where the only question is what is
+    missing, and it matches the exit code exactly.
     """
     pal = _Palette(color)
     out: List[str] = []
@@ -1041,12 +1015,12 @@ th{background:#eee}code{font-size:.95em}
 .missing{color:#a40000;font-weight:700}.missing::before{content:"\\2717 "}
 .cacheonly{color:#8a5a00;font-weight:700}.cacheonly::before{content:"\\26A0 "}
 .na{color:#777}.old{color:#777;text-decoration:line-through}.new{color:#8a5a00;font-weight:700}
-.path{color:#1b4e8a}.note{color:#555;max-width:60em;font-size:.92em}
+.note{color:#555;max-width:60em;font-size:.92em}
 .explicit{color:#1b4e8a;font-weight:700}.implicit{color:#555}
 pre{background:#f5f5f5;padding:1rem;overflow-x:auto}
 @media (prefers-color-scheme:dark){body{background:#111;color:#eee}th{background:#222}
 th,td{border-color:#444}pre{background:#1c1c1c}.ok{color:#6fd66f}.missing{color:#ff7b7b}
-.cacheonly{color:#ffc857}.new{color:#ffc857}.explicit,.path{color:#8ab8f0}
+.cacheonly{color:#ffc857}.new{color:#ffc857}.explicit{color:#8ab8f0}
 .na,.old,.implicit,.note{color:#999}}
 """
 
@@ -1092,22 +1066,29 @@ def render_html(report: Report) -> str:
 
     # ---- dependencies ----------------------------------------------------
     w("<h2>Dependencies (%d) and binary availability</h2>" % len(report.deps))
-    # The newest version each package has on the remote, from the same data as
-    # the "Newer versions" section below.  With --no-check-updates nothing was
-    # searched, so the column is dropped rather than filled with cells that
-    # would read as "up to date".
+    # This table is the one place per-package facts live; there is no separate
+    # "newer versions" or "missing binaries" section repeating its cells.
+    # With --no-check-updates nothing was searched, so the newest column is
+    # dropped rather than filled with cells that would read as "up to date".
     newest = {u.ref: u for u in report.updates}
     rows = []
     for dep in sorted(report.deps.values(), key=_dep_key):
-        row = [e(dep.ref), e(_via(dep, " \u2192 ")).replace("\n", "<br>"), e(dep.context)]
+        # A version picked from a range says so in the package cell's tooltip.
+        rng = report.ranges.get(dep.ref)
+        package = '<span title="from %s">%s</span>' % (e(rng), e(dep.ref)) if rng else e(dep.ref)
+        row = [package, e(_via(dep, " \u2192 ")).replace("\n", "<br>"), e(dep.context)]
         if report.checked_updates:
             u = newest.get(dep.ref)
-            # The note explaining how "newer" was decided is the cell's tooltip.
-            row.append(
-                '<span class="new" title="%s">%s</span>' % (e(u.note), e(_newest(u)))
-                if u
-                else '<span class="ok">%s</span>' % _newest(u)
-            )
+            # How "newer" was decided, and both export dates, are the tooltip.
+            if u:
+                tip = "%s; exported %s, newest exported %s" % (
+                    u.note,
+                    _date(u.current_time),
+                    _date(u.latest_time),
+                )
+                row.append('<span class="new" title="%s">%s</span>' % (e(tip), e(_newest(u))))
+            else:
+                row.append('<span class="ok">%s</span>' % _newest(u))
         for bt in report.build_types:
             status, pid, remote = dep.binaries[bt]
             cls = {"Remote": "ok", "Missing": "missing", "CacheOnly": "cacheonly"}.get(status, "na")
@@ -1131,7 +1112,7 @@ def render_html(report: Report) -> str:
         "cross-compile, and a package can appear in both contexts.</p>"
     )
 
-    # ---- overrides (before missing binaries, see render_text) ------------
+    # ---- overrides --------------------------------------------------------
     w("<h2>Overrides (%d)</h2>" % len(report.overrides))
     if report.overrides:
         rows = [
@@ -1148,49 +1129,6 @@ def render_html(report: Report) -> str:
         w(_html_table(["package", "wanted", "forced to", "by", "kind"], rows))
     else:
         w("<p>None detected.</p>")
-
-    # ---- missing binaries ------------------------------------------------
-    problems = report.problems()
-    n_missing = sum(len(d.missing()) for d in problems)
-    w("<h2>Missing binaries (%d)</h2>" % n_missing)
-    if problems:
-        rows = []
-        for dep in sorted(problems, key=lambda d: d.ref.lower()):
-            for bt in dep.missing():
-                status, pid, _ = dep.binaries[bt]
-                reason = '<span class="%s">%s</span>' % (
-                    "cacheonly" if status == "CacheOnly" else "missing",
-                    e(_reason(status)),
-                )
-                rows.append(
-                    [e(dep.ref), e(_resolved_bt(dep, bt)), "<code>%s</code>" % e(pid), reason]
-                )
-        w(_html_table(["package", "build type", "package_id", "reason"], rows))
-    else:
-        w(
-            '<p class="ok">All packages have binaries on the remote for %s.</p>'
-            % e(", ".join(report.build_types))
-        )
-
-    # ---- newer versions (informational, never affects the exit code) -----
-    w("<h2>Newer versions (%d)</h2>" % len(report.updates))
-    if report.updates:
-        rows = [
-            [
-                e(u.ref),
-                '<span class="new">%s</span>' % e(u.latest),
-                e(u.remote),
-                e(_date(u.current_time)),
-                e(_date(u.latest_time)),
-                e(u.note),
-            ]
-            for u in sorted(report.updates, key=_update_key)
-        ]
-        w(_html_table(["package", "newest", "remote", "exported", "newest exported", "note"], rows))
-    elif not report.checked_updates:
-        w("<p>Not checked (--no-check-updates).</p>")
-    else:
-        w('<p class="ok">Every package is the newest version on the remote.</p>')
 
     # ---- update order (same words as render_text) ------------------------
     steps = _update_order(report)
@@ -1211,17 +1149,7 @@ def render_html(report: Report) -> str:
     else:
         w('<p class="ok">Nothing to update.</p>')
 
-    # Tree text is escaped per fragment so the tag spans survive; the tag
-    # classes reuse the table's colours (path = dim, override = yellow, ...).
-    tag_class = {"path": "path", "override": "new", "missing": "missing", "range": "na"}
-    tree_lines = []
-    for head, tags, tail in _tree_rows(report):
-        spans = "; ".join(
-            '<span class="%s">%s</span>' % (tag_class[k], e(t)) if k in tag_class else e(t)
-            for k, t in tags
-        )
-        tree_lines.append(e(head) + ("  [" + spans + "]" if tags else "") + e(tail))
-    w("<h2>Dependency hierarchy</h2><pre>%s</pre>" % "\n".join(tree_lines))
+    w("<h2>Dependency hierarchy</h2><pre>%s</pre>" % e("\n".join(_tree_rows(report))))
     w("</body></html>")
     return "".join(parts)
 

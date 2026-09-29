@@ -29,13 +29,13 @@ Given a `conanfile.py`, `conandeps` tells you four things in one report:
    `self.requires("x/2.0", override=True)` and implicit ones, where a
    downstream consumer simply asks for a newer version than a transitive
    dependency declared. Each override is listed with who wanted what and who
-   forced the change, and annotated on the exact edge of the dependency tree
-   where it happened.
+   forced the change.
 4. **Which packages have a newer version on the remote** – versions are
    ordered with Conan's own lenient comparison (which copes with dates and
    most non-semver schemes), and the export timestamps of the current and
-   newest recipe are fetched and shown so that schemes with no meaningful
-   order (branch names, hashes) can still be judged by date. Informational
+   newest recipe are fetched and shown (hover the newest version in the HTML
+   report) so that schemes with no meaningful order (branch names, hashes)
+   can still be judged by date. Informational
    only: it never affects the exit code. Disable with `--no-check-updates`.
 
 ### Installation
@@ -178,7 +178,8 @@ file never produces colour codes unless you pass `--color always`.
 `--html FILE` writes the report proper: one self-contained page, no scripts
 and no external assets, so it can be attached to a build or mailed to a
 colleague. It follows the same colour coding, adapts to a dark theme, and has
-five tables plus the dependency tree. The same header opens the page, and the
+three tables plus the dependency tree, each saying something the others do
+not. The same header opens the page, and the
 package name and version become the browser tab's title, which matters once
 several reports are open at once.
 
@@ -198,7 +199,8 @@ The `via` column is the shortest path from your conanfile to the package –
 by several others gets one line per parent (boost above is pulled in by both
 MyDepA and Zigma), shortest path first. Rows are sorted on the via column and
 then the package name, direct dependencies first, so a branch's transitive
-dependencies stay together.
+dependencies stay together. Hover a package that was resolved from a version
+range to see the range it was declared with.
 
 The `context` column is Conan's host/build split. `host` means the package is
 part of what you are building: it is compiled for your target platform and
@@ -210,8 +212,9 @@ different platforms and the same package can appear in both contexts. The
 HTML report spells this out in a note under the table.
 
 The `newest` column gives the newest version of that package on the remote, or
-`up to date` when the resolved one is already the newest; `--no-check-updates`
-removes the column along with the `Newer versions` section.
+`up to date` when the resolved one is already the newest. Hover a newer version
+to see how "newer" was decided and when the current and the newest recipe were
+exported. `--no-check-updates` removes the column.
 
 Each build-type cell is one of:
 
@@ -227,21 +230,24 @@ Each build-type cell is one of:
 * Header-only packages show the remote in every column: their package_id
   ignores `build_type`, so one binary serves all of them.
 
+There is no separate list of missing binaries or newer versions: the cells
+above are that list. The terminal output still lists the missing binaries,
+since that is what a CI log needs.
+
 The **dependency hierarchy** at the end of the page shows the same graph as a
-tree, where every indirect node also spells out the path of its branch, so
-deep indentation never has to be counted:
+plain tree. It carries no annotations, since everything about a package is in
+the table:
 
 ```
 MyProject/conanfile.py
 |-- MyDepA/1.0
-|   `-- boost/1.8  [MyDepA -> boost]
+|   `-- boost/1.8
 `-- MyDepB/1.0
-    `-- Zigma/1.0  [MyDepB -> Zigma; MISSING: RelWithDebInfo]
-        `-- boost/1.8  [MyDepB -> Zigma -> boost; overrides boost/1.7 (implicit by myproject/1.2)]
+    `-- Zigma/1.0
+        `-- boost/1.8
 ```
 
-The **overrides** and **newer versions** tables list what was rewritten and
-what has a newer reference on the remote. An override is credited to the
+The **overrides** table lists what was rewritten. An override is credited to the
 package that forced it, which for your own project is the name and version in
 its conanfile, or `your conanfile` when it declares neither. The `Update order` section answers
 "what do I bump first?". A package is in

@@ -278,7 +278,7 @@ def test_via_lists_every_parent_path():
 
 
 def _mini_report(
-    deps, overrides=(), updates=(), checked_updates=True, fallbacks=None, package=None
+    deps, overrides=(), updates=(), checked_updates=True, fallbacks=None, package=None, ranges=None
 ):
     """Hand-built single-build-type Report for renderer ordering tests."""
     return conandeps.Report(
@@ -288,7 +288,7 @@ def _mini_report(
         ["Release"],
         deps,
         list(overrides),
-        {},
+        dict(ranges or {}),
         [],
         list(updates),
         checked_updates,
@@ -325,8 +325,8 @@ def test_dependency_rows_sort_by_via_then_name():
     assert re.findall(r"<td>(\w+)/1\.0</td>", page.split("<h2>Overrides")[0]) == expected
 
 
-def test_overrides_before_missing_and_both_sorted():
-    """HTML overrides section precedes missing binaries; both sort alphabetically."""
+def test_overrides_and_missing_binaries_sorted():
+    """Overrides (HTML) and missing binaries (text) both sort alphabetically."""
     deps = {
         "zeta#host": _mini_dep("zeta/1.0", direct=True, status="Missing"),
         "alpha#host": _mini_dep("alpha/1.0", direct=True, status="Missing"),
@@ -336,13 +336,12 @@ def test_overrides_before_missing_and_both_sorted():
         conandeps.Override("alpha/1.0", "y/1.0", "y/1.1", "your conanfile", True),
     ]
     page = conandeps.render_html(_mini_report(deps, overrides))
-    assert page.index("<h2>Overrides") < page.index("<h2>Missing binaries")
     ov_table = page.split("<h2>Overrides")[1].split("<h2>")[0]
     assert re.findall(r"<td>(\w+)/1\.0</td>", ov_table) == ["alpha", "zeta"]
-    missing_table = page.split("<h2>Missing binaries")[1].split("<h2>")[0]
-    assert re.findall(r"<td>(\w+)/1\.0</td>", missing_table) == ["alpha", "zeta"]
+    # The HTML report has no separate missing-binaries section: the cells of
+    # the dependency table already say MISSING.
+    assert "Missing binaries" not in page
 
-    # The text report keeps only the missing binaries, in the same order.
     text = conandeps.render_text(_mini_report(deps, overrides))
     assert re.findall(r"^(\w+)/1\.0", text.split("Missing binaries")[1], re.M) == ["alpha", "zeta"]
 
@@ -367,18 +366,31 @@ def test_update_note():
     assert note(False, 100, 200) == "newer export date only"
 
 
-def test_updates_render_sorted_with_dates():
-    deps = {"a#host": _mini_dep("a/1.0", direct=True)}
+def test_newest_tooltip_carries_the_export_dates():
+    """The newest cell's tooltip is the only place the export dates are shown."""
+    deps = {
+        "alpha#host": _mini_dep("alpha/1.0", direct=True),
+        "zeta#host": _mini_dep("zeta/1.0", direct=True),
+    }
     ups = [
         conandeps.Update("zeta/1.0", "zeta/2.0", "test", 1700000000, 1760000000, "newer version"),
         conandeps.Update("alpha/1.0", "alpha/2.0", "test", None, None, "newer version"),
     ]
     page = conandeps.render_html(_mini_report(deps, updates=ups))
-    section = page.split("Newer versions (2)")[1]
-    assert re.findall(r"<td>(\w+)/1\.0</td>", section) == ["alpha", "zeta"]
-    assert '<span class="new">alpha/2.0</span>' in section
-    assert "2023-11-14" in section and "2025-10-09" in section
-    assert "<td>?</td>" in section  # unreadable manifests render as ?, not a guess
+    assert "Newer versions" not in page  # folded into the dependency table
+    assert 'title="newer version; exported 2023-11-14, newest exported 2025-10-09">2.0<' in page
+    # Unreadable manifests render as ?, not a guess.
+    assert 'title="newer version; exported ?, newest exported ?">2.0<' in page
+
+
+def test_version_range_is_the_package_tooltip():
+    deps = {
+        "a#host": _mini_dep("a/1.2", direct=True),
+        "b#host": _mini_dep("b/1.0", direct=True),
+    }
+    page = conandeps.render_html(_mini_report(deps, ranges={"a/1.2": "a/[>=1.0 <2]"}))
+    assert '<td><span title="from a/[&gt;=1.0 &lt;2]">a/1.2</span></td>' in page
+    assert "<td>b/1.0</td>" in page  # no range, no tooltip
 
 
 def test_dependency_table_shows_newest_version():
@@ -396,7 +408,8 @@ def test_dependency_table_shows_newest_version():
 
     table = conandeps.render_html(_mini_report(deps, updates=ups)).split("<h2>Overrides")[0]
     assert "<th>newest</th>" in table
-    assert '<td><span class="new" title="newer version">2.0</span></td>' in table
+    tip = "newer version; exported ?, newest exported ?"
+    assert '<td><span class="new" title="%s">2.0</span></td>' % tip in table
     assert '<td><span class="ok">up to date</span></td>' in table
 
     plain = _mini_report(deps, checked_updates=False)
@@ -476,9 +489,11 @@ def test_newer_versions(report):
     # Manifest timestamps come back for both refs, 1.2 exported after 1.1.
     assert u.current_time and u.latest_time and u.latest_time >= u.current_time
     page = conandeps.render_html(report)
-    assert "<h2>Newer versions (1)</h2>" in page
-    assert re.search(r"<td>libbar/1\.1</td>.*?<td>test</td><td>\d{4}-\d{2}-\d{2}</td>", page)
-    assert '<span class="new">libbar/1.2</span>' in page
+    assert re.search(
+        r'<td>libbar/1\.1</td>.*?<span class="new" title="newer version; '
+        r'exported \d{4}-\d{2}-\d{2}, newest exported \d{4}-\d{2}-\d{2}">1\.2</span>',
+        page,
+    )
 
 
 def test_missing_binaries(report):
@@ -543,8 +558,8 @@ def test_fallback_is_spelled_out_in_both_renderers():
 
     page = conandeps.render_html(report)
     assert "<b>fallbacks:</b> Release: icu -&gt; Debug, zlib -&gt; Debug" in page
-    assert ">test (via Debug)</span>" in page  # the dependency table cell
-    assert "<td>Release (via Debug)</td>" in page
+    assert ">test (via Debug)</span>" in page  # a found binary
+    assert ">MISSING (via Debug)</span>" in page  # and one missing under the fallback too
 
 
 def test_fallback_build_types(conan_env, tmp_path):
@@ -664,14 +679,15 @@ def test_html_render(report):
     # Overrides table: wanted version struck through, forced version marked.
     assert '<td>libfoo/1.0</td><td><span class="old">libbar/1.0</span></td>' in page
     assert "explicit (override=True)" in page
-    assert re.search(r"<td>libbar/1\.1</td><td>Debug</td><td><code>[0-9a-f]{40}</code>", page)
-    assert page.startswith("<!DOCTYPE html>") and 'class="missing"' in page
-    # dependencies, overrides, missing binaries, newer versions, update order
-    assert page.count("<table>") == 5
-    # The tree carries a typed tag per annotation, coloured by kind.
-    assert '[<span class="path">libfoo -&gt; libbar -&gt; libdeep</span>]' in page
-    assert '<span class="new">overrides libbar/1.0 (explicit by myproject/0.1)</span>' in page
-    assert '<span class="missing">MISSING: Debug,RelWithDebInfo</span>' in page
+    # A missing cell carries its package_id as a tooltip, like every cell.
+    assert re.search(r'<span class="missing" title="package_id [0-9a-f]{40}">MISSING</span>', page)
+    assert page.startswith("<!DOCTYPE html>")
+    # dependencies, overrides, update order - nothing repeats the first one
+    assert page.count("<table>") == 3
+    # The tree is structure only; every annotation lives in a table.
+    tree = page.split("<h2>Dependency hierarchy</h2>")[1]
+    assert "|-- libfoo/1.0\n|   `-- libbar/1.1\n|       `-- libdeep/1.0\n" in tree
+    assert "[" not in tree and "<span" not in tree
     assert 'class="explicit"' in page and 'class="implicit"' in page
     assert "<script" not in page  # self-contained, static
 
