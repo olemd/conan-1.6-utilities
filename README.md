@@ -366,11 +366,23 @@ conansbom path/to/conanfile.py -pr myprofile -s build_type=Debug > sbom.cdx.json
 | `-r`, `-pr`, `-s`, `-o`, `-u` | As for `conandeps`: remote, profile, settings, options, `conan -u`. |
 | `-f`, `--format` | `cyclonedx` (default), `spdx` or `html`. |
 | `--out FILE` | Write the SBOM to `FILE`. Default: stdout. |
+| `--require-licenses` | Exit `1` when a package, or the project itself, declares no license. The SBOM is written either way. |
 | `-v` | Stream Conan's own output to stderr live. |
 
 An SBOM describes one concrete build, so there is no build-type matrix: pass
-the profile and settings you ship with. Exit status: `0` SBOM written, `2`
-Conan failed to build the graph.
+the profile and settings you ship with. Exit status: `0` SBOM written, `1`
+written, but `--require-licenses` found packages without a license, `2` Conan
+failed to build the graph.
+
+To make CI fail when a dependency has no declared license:
+
+```bash
+conansbom conanfile.py -r myremote --require-licenses --out sbom.cdx.json
+```
+
+The failing run still writes the SBOM, so it can be kept as a build artifact
+and inspected, and stderr names the packages:
+`conansbom: error: no license declared: libfoo/1.0, …`.
 
 What is in it:
 
@@ -404,7 +416,7 @@ What is in it:
 * **Missing licenses are flagged.** Packages whose recipe declares no license
   are listed on stderr – `conansbom: WARN: no license declared: …` – and in
   red in the HTML page, since those are the ones a compliance review has to
-  chase.
+  chase. `--require-licenses` turns the same list into a failing exit code.
 
 The SPDX license list (currently 3.29.0) is embedded, so the tool works
 offline.

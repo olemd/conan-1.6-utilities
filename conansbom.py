@@ -64,10 +64,13 @@ below (``SPDX_LIST_VERSION``) so the tool works offline; a test fails when
 the validator the tests use knows an identifier the list lacks.  A recipe's
 tuple of licenses means all of them apply, i.e. ``AND``.
 
-Packages whose recipe declares no license are listed on stderr: those are the
-ones a compliance review has to chase.
+Packages whose recipe declares no license (the project included) are listed
+on stderr: those are the ones a compliance review has to chase.  With
+``--require-licenses`` that list fails the run, for CI; the SBOM is still
+written, so the failing build's document can be inspected.
 
-Exit status: ``0`` SBOM written, ``2`` Conan could not build the graph.
+Exit status: ``0`` SBOM written, ``1`` written but ``--require-licenses`` found
+packages without a license, ``2`` Conan could not build the graph.
 
 Targets Conan 1.66.  Uses only the standard library, the Conan API and
 ``conandeps`` from this repository.
@@ -873,6 +876,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         help="output format (default: %(default)s)",
     )
     p.add_argument("--out", metavar="FILE", help="write the SBOM to FILE (default: stdout)")
+    p.add_argument(
+        "--require-licenses",
+        action="store_true",
+        help="exit 1 when a package (or the project) declares no license; "
+        "the SBOM is written either way",
+    )
     p.add_argument("-v", "--verbose", action="store_true", help="stream Conan's output to stderr")
     args = p.parse_args(argv)
 
@@ -896,10 +905,12 @@ def main(argv: Optional[List[str]] = None) -> int:
             fh.write(text)
     else:
         sys.stdout.write(text)
+    # The same list decides the warning and the exit code, so they cannot disagree.
     missing = unlicensed(sbom)
     if missing:
-        sys.stderr.write("conansbom: WARN: no license declared: %s\n" % ", ".join(missing))
-    return 0
+        level = "error" if args.require_licenses else "WARN"
+        sys.stderr.write("conansbom: %s: no license declared: %s\n" % (level, ", ".join(missing)))
+    return 1 if missing and args.require_licenses else 0
 
 
 if __name__ == "__main__":

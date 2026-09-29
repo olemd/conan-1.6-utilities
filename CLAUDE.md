@@ -231,9 +231,13 @@ pip works too (plain PEP 517, documented in the README). pip upgrades need
   CycloneDX (which cannot mix entries and an expression); anything else →
   `LicenseRef-<text>` with `hasExtractedLicensingInfos` in SPDX,
   `license.name` in CycloneDX. A recipe tuple means AND.
-  `licenseConcluded`/`copyrightText` stay `NOASSERTION`. Unlicensed refs go
-  to stderr, never a non-zero exit (a `--require-licenses` flag is the
-  natural extension if CI wants one).
+  `licenseConcluded`/`copyrightText` stay `NOASSERTION`.
+- **Missing licenses warn by default; `--require-licenses` fails (exit 1).**
+  `unlicensed()` (the project included) is the single list behind both the
+  stderr line (`WARN:`, or `error:` with the flag) and the exit code, so they
+  cannot disagree. The SBOM is written before the exit so CI can keep the
+  failing build's document. Exit codes mirror conandeps: 1 = problem found,
+  2 = Conan error.
 - **Regenerating the SPDX list**: fetch `json/licenses.json` and
   `json/exceptions.json` from
   https://github.com/spdx/license-list-data (all ids, deprecated included),

@@ -170,6 +170,20 @@ def test_unlicensed_lists_what_review_has_to_chase():
     assert conansbom.unlicensed(_hand_built()) == ["hdr/1.0"]
 
 
+def test_require_licenses_exit_code(monkeypatch, capsys):
+    """Only with --require-licenses does a missing license change the exit code."""
+    sbom = _hand_built()  # hdr/1.0 declares no license
+    monkeypatch.setattr(conansbom, "build_sbom", lambda *args: sbom)
+    assert conansbom.main(["conanfile.py"]) == 0
+    assert "conansbom: WARN: no license declared: hdr/1.0\n" in capsys.readouterr().err
+    assert conansbom.main(["conanfile.py", "--require-licenses"]) == 1
+    assert "conansbom: error: no license declared: hdr/1.0\n" in capsys.readouterr().err
+
+    sbom.components["hdr/1.0"].licenses = ["BSL-1.0"]
+    assert conansbom.main(["conanfile.py", "--require-licenses"]) == 0
+    assert "no license declared" not in capsys.readouterr().err
+
+
 @pytest.mark.parametrize(
     "declared, expected",
     [
@@ -413,6 +427,16 @@ def test_cli(sbom_project, tmp_path, capsys):
     page = tmp_path / "sbom.html"
     assert conansbom.main([sbom_project, "-r", "test", "--format", "html", "--out", str(page)]) == 0
     assert "<h2>Build only (2)</h2>" in page.read_text()  # tool and toolhelper
+
+    # --require-licenses fails the run on the fixture's unlicensed packages, but
+    # still writes the document, so the failing build's SBOM can be inspected.
+    strict = tmp_path / "strict.json"
+    assert (
+        conansbom.main([sbom_project, "-r", "test", "--require-licenses", "--out", str(strict)])
+        == 1
+    )
+    _validate(json.loads(strict.read_text()))
+    assert "conansbom: error: no license declared: " in capsys.readouterr().err
 
     assert conansbom.main([str(Path(tmp_path) / "nope" / "conanfile.py")]) == 2
     assert "conansbom: error:" in capsys.readouterr().err
