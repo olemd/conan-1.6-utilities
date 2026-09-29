@@ -239,7 +239,7 @@ plain tree. It carries no annotations, since everything about a package is in
 the table:
 
 ```
-MyProject/conanfile.py
+myproject/1.2
 |-- MyDepA/1.0
 |   `-- boost/1.8
 `-- MyDepB/1.0
@@ -256,6 +256,8 @@ requirements has one: MyDepA and Zigma above are at their newest version, but
 they still have to be re-released against boost/1.9 before your project can
 see it. Everything in a wave is independent of everything else in that wave,
 so a wave can be done in parallel, and your conanfile is always the last one.
+Like the root of the tree, it is shown by its package name, or by its path
+when the conanfile declares no name and version.
 `--no-check-updates` skips this section too.
 
 Things worth knowing:

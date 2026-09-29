@@ -713,7 +713,9 @@ def _tree_rows(report: Report) -> List[str]:
             walk(child, child_prefix, i == len(dep.requires) - 1, seen + (name,))
 
     roots = [d.name for d in report.deps.values() if d.direct]
-    rows.append(report.conanfile)
+    # The root is named like the rest of the report: by the package the
+    # conanfile declares, or by its path when it declares neither.
+    rows.append(report.package or report.conanfile)
     for i, name in enumerate(roots):
         walk(name, "", i == len(roots) - 1, ())
     return rows
@@ -776,7 +778,7 @@ def _update_order(report: Report) -> List[Step]:
     direct = [d.name for d in report.deps.values() if d.direct]
     steps.append(
         Step(
-            report.conanfile,
+            report.package or report.conanfile,  # as in _tree_rows
             max(s.wave for s in steps) + 1,
             "bump requirements",
             None,

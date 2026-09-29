@@ -452,6 +452,9 @@ def test_update_order_waves_consumers_after_requirements():
     assert steps[1].action == "re-release" and steps[1].blocked_by == ["boost"]
     assert steps[-1].action == "bump requirements"
     assert steps[-1].blocked_by == ["MyDepA", "MyDepB"]  # direct requirements only
+    # A conanfile that names itself is the last step by that name, not its path.
+    named = conandeps._update_order(_mini_report(deps, updates=ups, package="myproject/1.2"))
+    assert named[-1].ref == "myproject/1.2"
 
     page = conandeps.render_html(_mini_report(deps, updates=ups))
     html_section = page.split("<h2>Update order (4 waves)</h2>")[1]
@@ -475,7 +478,7 @@ def test_update_order_from_the_real_graph(report):
     assert steps["libbar/1.1"].action == "update to 1.2"
     assert steps["libfoo/1.0"].wave == 2
     assert steps["libfoo/1.0"].blocked_by == ["libbar"]
-    assert steps[report.conanfile].wave == 3
+    assert steps["myproject/0.1"].wave == 3  # the named conanfile, not its path
     assert "libqux/1.1" not in steps  # nothing outdated below it
 
 
@@ -686,6 +689,9 @@ def test_html_render(report):
     assert page.count("<table>") == 3
     # The tree is structure only; every annotation lives in a table.
     tree = page.split("<h2>Dependency hierarchy</h2>")[1]
+    # The fixture's consumer is named, so the root is the package, not the path.
+    assert tree.startswith("<pre>myproject/0.1\n|-- ")
+    assert "<td>3</td><td>myproject/0.1</td>" in page  # last update-order wave
     assert "|-- libfoo/1.0\n|   `-- libbar/1.1\n|       `-- libdeep/1.0\n" in tree
     assert "[" not in tree and "<span" not in tree
     assert 'class="explicit"' in page and 'class="implicit"' in page
