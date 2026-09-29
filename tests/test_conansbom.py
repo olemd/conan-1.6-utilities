@@ -3,7 +3,8 @@
 Rendering is tested on hand-built ``Sbom`` objects; one integration test runs
 against the shared ``conan_env`` fixture (see ``conftest.py``) with a project
 that adds a licensed build tool on top of the fixture's packages.  Every
-document is validated against the CycloneDX 1.6 JSON schema.
+CycloneDX document is validated against the CycloneDX 1.6 JSON schema, every
+SPDX document with the official spdx-tools validator.
 """
 
 import json
@@ -15,6 +16,9 @@ import pytest
 from conftest import RECIPE, _conan
 from cyclonedx.schema import SchemaVersion
 from cyclonedx.validation.json import JsonStrictValidator
+from spdx_tools.common.spdx_licensing import spdx_licensing
+from spdx_tools.spdx.parser.parse_anything import parse_file
+from spdx_tools.spdx.validation.document_validator import validate_full_spdx_document
 
 import conansbom
 from conansbom import Component, Sbom
@@ -24,6 +28,14 @@ def _validate(doc: dict) -> None:
     """Fail with the schema error when ``doc`` is not valid CycloneDX 1.6."""
     error = JsonStrictValidator(SchemaVersion.V1_6).validate_str(json.dumps(doc))
     assert error is None, error
+
+
+def _validate_spdx(doc: dict, tmp_path: Path) -> None:
+    """Fail with the validator's messages when ``doc`` is not valid SPDX 2.3."""
+    path = tmp_path / "doc.spdx.json"
+    path.write_text(json.dumps(doc))
+    messages = validate_full_spdx_document(parse_file(str(path)))
+    assert not messages, [m.validation_message for m in messages]
 
 
 def _components(doc: dict) -> dict:
@@ -84,6 +96,7 @@ def _hand_built() -> Sbom:
         "1.2",
         licenses=["Apache-2.0"],
         requires=["zlib/1.3", "hdr/1.0", "cmake/3.29@acme/stable"],
+        build_requires=["cmake/3.29@acme/stable"],
     )
     return Sbom(root, comps, {"os": "Linux", "build_type": "Release"})
 
@@ -100,9 +113,8 @@ def test_cyclonedx_document():
     # The project is the subject of the SBOM, not one of its components.
     subject = doc["metadata"]["component"]
     assert subject["name"] == "myproject" and subject["purl"] == "pkg:conan/myproject@1.2"
-    assert subject["licenses"] == [
-        {"license": {"name": "Apache-2.0", "acknowledgement": "declared"}}
-    ]
+    # A known SPDX identifier is an id, not just a name.
+    assert subject["licenses"] == [{"license": {"id": "Apache-2.0", "acknowledgement": "declared"}}]
     assert "myproject" not in _components(doc)
     assert {"name": "conan:setting:os", "value": "Linux"} in doc["metadata"]["properties"]
 
@@ -120,7 +132,10 @@ def test_cyclonedx_document():
     cmake = comps["cmake"]
     assert cmake["scope"] == "excluded"
     assert cmake["purl"] == "pkg:conan/cmake@3.29?channel=stable&user=acme"
-    assert [lic["license"]["name"] for lic in cmake["licenses"]] == ["BSD-3-Clause", "Proprietary"]
+    assert cmake["licenses"] == [
+        {"license": {"id": "BSD-3-Clause", "acknowledgement": "declared"}},
+        {"license": {"name": "Proprietary", "acknowledgement": "declared"}},
+    ]
     # A package in both contexts is one component that ships, with both ids.
     hdr = comps["hdr"]
     assert hdr["scope"] == "required" and "licenses" not in hdr
@@ -153,6 +168,151 @@ def test_unnamed_project_has_no_purl():
 
 def test_unlicensed_lists_what_review_has_to_chase():
     assert conansbom.unlicensed(_hand_built()) == ["hdr/1.0"]
+
+
+@pytest.mark.parametrize(
+    "declared, expected",
+    [
+        ("MIT", "MIT"),
+        ("mit", "MIT"),  # identifiers match case-insensitively; the list's case wins
+        ("GPL-2.0", "GPL-2.0"),  # deprecated, but recipes still declare it
+        ("GPL-2.0+", "GPL-2.0+"),
+        ("MIT or apache-2.0", "MIT OR Apache-2.0"),
+        (
+            "GPL-2.0-or-later WITH Classpath-exception-2.0",
+            "GPL-2.0-or-later WITH Classpath-exception-2.0",
+        ),
+        ("(MIT OR BSD-3-Clause) AND Zlib", "(MIT OR BSD-3-Clause) AND Zlib"),
+        ("Proprietary", None),
+        ("LicenseRef-acme", None),  # a recipe cannot supply the text for it
+        ("MIT OR", None),
+        ("(MIT", None),
+        ("MIT)", None),
+        ("MIT Apache-2.0", None),
+        ("MIT WITH Zlib", None),  # WITH takes an exception, not a license
+        ("Classpath-exception-2.0", None),  # an exception on its own is no license
+        ("(MIT) WITH Classpath-exception-2.0", None),
+        ("", None),
+    ],
+)
+def test_spdx_expression(declared, expected):
+    assert conansbom.spdx_expression(declared) == expected
+
+
+def test_embedded_spdx_list_is_current():
+    """Every SPDX identifier the validator knows must be in the embedded list.
+
+    When this fails, a newer license-expression (pulled in by spdx-tools)
+    knows identifiers the embedded SPDX list lacks: regenerate the list (see
+    CLAUDE.md).  The other direction is fine - the official list is often
+    ahead of the validator's copy.
+    """
+    known = {k for k in spdx_licensing.known_symbols if not k.startswith("LicenseRef-")}
+    embedded = set(conansbom._SPDX_LICENSES) | set(conansbom._SPDX_EXCEPTIONS)
+    assert sorted(known - embedded) == []
+
+
+def test_cyclonedx_compound_license_is_one_expression():
+    """CycloneDX cannot mix license entries and an expression in one list."""
+    assert conansbom._cdx_licenses(["MIT OR Apache-2.0", "ACME EULA"]) == [
+        {
+            "expression": "(MIT OR Apache-2.0) AND LicenseRef-ACME-EULA",
+            "acknowledgement": "declared",
+        }
+    ]
+    # "Apache-2.0+" is an expression (a license with "or later"), but "GPL-2.0+"
+    # is itself a (deprecated) identifier on the SPDX list, so it stays an id.
+    assert conansbom._cdx_licenses(["Apache-2.0+"]) == [
+        {"expression": "Apache-2.0+", "acknowledgement": "declared"}
+    ]
+    assert conansbom._cdx_licenses(["GPL-2.0+"]) == [
+        {"license": {"id": "GPL-2.0+", "acknowledgement": "declared"}}
+    ]
+    sbom = _hand_built()
+    sbom.components["zlib/1.3"].licenses = ["GPL-2.0+", "MIT OR Apache-2.0"]
+    sbom.components["hdr/1.0"].licenses = ["Apache-2.0+"]
+    _validate(conansbom.to_cyclonedx(sbom))
+
+
+def test_spdx_document(tmp_path):
+    doc = conansbom.to_spdx(
+        _hand_built(),
+        namespace="https://spdx.org/spdxdocs/conansbom-test",
+        timestamp="2026-09-29T12:00:00Z",
+    )
+    _validate_spdx(doc, tmp_path)
+    assert doc["spdxVersion"] == "SPDX-2.3"
+    assert doc["creationInfo"]["comment"] == "Conan settings: build_type=Release, os=Linux"
+    pkgs = {p["name"]: p for p in doc["packages"]}
+    project, cmake, hdr = pkgs["myproject"], pkgs["cmake"], pkgs["hdr"]
+    assert project["primaryPackagePurpose"] == "APPLICATION"
+    assert project["licenseDeclared"] == "Apache-2.0"
+    # A tuple means all apply; a non-SPDX license is a LicenseRef with its text.
+    assert cmake["licenseDeclared"] == "BSD-3-Clause AND LicenseRef-Proprietary"
+    assert doc["hasExtractedLicensingInfos"] == [
+        {
+            "licenseId": "LicenseRef-Proprietary",
+            "name": "Proprietary",
+            "extractedText": "Proprietary",
+            "comment": "Declared by the Conan recipe; not an SPDX license identifier.",
+        }
+    ]
+    assert hdr["licenseDeclared"] == "NOASSERTION"  # nothing declared, nothing concluded
+    assert cmake["comment"].startswith("Build only")
+    assert "comment" not in hdr
+    assert cmake["externalRefs"][0]["referenceLocator"] == (
+        "pkg:conan/cmake@3.29?channel=stable&user=acme"
+    )
+    assert pkgs["zlib"]["sourceInfo"] == (
+        "Conan recipe repository: https://github.com/conan-io/conan-center-index"
+    )
+
+    rels = {
+        (r["spdxElementId"], r["relationshipType"], r["relatedSpdxElement"])
+        for r in doc["relationships"]
+    }
+    root_id, cmake_id = project["SPDXID"], cmake["SPDXID"]
+    assert ("SPDXRef-DOCUMENT", "DESCRIBES", root_id) in rels
+    assert (root_id, "DEPENDS_ON", pkgs["zlib"]["SPDXID"]) in rels
+    assert (cmake_id, "BUILD_DEPENDENCY_OF", root_id) in rels  # a build requirement
+    assert (cmake_id, "DEPENDS_ON", hdr["SPDXID"]) in rels  # the tool's own requirement
+
+
+def test_spdx_unnamed_project(tmp_path):
+    sbom = _hand_built()
+    sbom.root = Component("consumer", "consumer", None, is_package=False, requires=["zlib/1.3"])
+    doc = conansbom.to_spdx(sbom)
+    _validate_spdx(doc, tmp_path)
+    project = doc["packages"][0]
+    assert project["SPDXID"] == "SPDXRef-Project" and "externalRefs" not in project
+    assert doc["documentNamespace"].startswith("https://spdx.org/spdxdocs/conansbom-consumer-")
+
+
+def test_html_page():
+    sbom = _hand_built()
+    sbom.components["zlib/1.3"].homepage = "javascript:alert(1)"  # never a link
+    page = conansbom.to_html(sbom, timestamp="2026-09-29T12:00:00Z")
+    assert page.startswith("<!DOCTYPE html>") and "<script" not in page
+    assert "<title>SBOM: myproject/1.2</title>" in page
+    assert "<b>license:</b> Apache-2.0" in page
+    assert "<b>build:</b> build_type=Release, os=Linux" in page
+    assert 'href="javascript' not in page and "javascript:alert(1)" in page
+
+    licenses = page.split("<h2>Licenses</h2>")[1].split("<h2>")[0]
+    # One row per declared license: text, SPDX form, where it ships, where it only builds.
+    assert (
+        "<tr><td>BSD-3-Clause</td><td>BSD-3-Clause</td><td>-</td>"
+        "<td>cmake/3.29@acme/stable</td></tr>" in licenses
+    )
+    assert '<td>Proprietary</td><td><span class="na">no</span></td>' in licenses
+    # Unlicensed packages come last, flagged.
+    assert licenses.index("Zlib") < licenses.index('<span class="missing">none declared</span>')
+
+    shipped = page.split("<h2>Shipped (2)</h2>")[1].split("<h2>")[0]
+    assert "<td>hdr/1.0</td>" in shipped and "<td>zlib/1.3</td>" in shipped
+    assert "cmake" not in shipped
+    build = page.split("<h2>Build only (1)</h2>")[1]
+    assert "<td>cmake/3.29@acme/stable</td><td>BSD-3-Clause<br>Proprietary</td>" in build
 
 
 PROJECT = """\
@@ -241,6 +401,18 @@ def test_cli(sbom_project, tmp_path, capsys):
     # Without --out the document is stdout, and nothing else is.
     assert conansbom.main([sbom_project, "-r", "test"]) == 0
     assert json.loads(capsys.readouterr().out)["bomFormat"] == "CycloneDX"
+
+    spdx = tmp_path / "sbom.spdx.json"
+    assert conansbom.main([sbom_project, "-r", "test", "-f", "spdx", "--out", str(spdx)]) == 0
+    doc = json.loads(spdx.read_text())
+    _validate_spdx(doc, tmp_path)
+    pkgs = {p["name"]: p for p in doc["packages"]}
+    assert pkgs["tool"]["licenseDeclared"] == "MIT"
+    assert pkgs["tool"]["comment"].startswith("Build only")
+
+    page = tmp_path / "sbom.html"
+    assert conansbom.main([sbom_project, "-r", "test", "--format", "html", "--out", str(page)]) == 0
+    assert "<h2>Build only (2)</h2>" in page.read_text()  # tool and toolhelper
 
     assert conansbom.main([str(Path(tmp_path) / "nope" / "conanfile.py")]) == 2
     assert "conansbom: error:" in capsys.readouterr().err

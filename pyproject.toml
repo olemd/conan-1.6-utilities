@@ -22,9 +22,10 @@ build-backend = "hatchling.build"
 only-include = ["conandeps.py", "conansbom.py"]
 
 [dependency-groups]
-# cyclonedx-python-lib validates conansbom output against the CycloneDX schema
-# in the tests only; the tools themselves stay stdlib + Conan.
-dev = ["cyclonedx-python-lib[json-validation]", "pytest", "ruff"]
+# cyclonedx-python-lib and spdx-tools validate conansbom output against the
+# CycloneDX schema and the SPDX spec in the tests only; the tools themselves
+# stay stdlib + Conan.
+dev = ["cyclonedx-python-lib[json-validation]", "pytest", "ruff", "spdx-tools"]
 
 [tool.ruff]
 target-version = "py38"

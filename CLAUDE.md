@@ -7,7 +7,7 @@ project was started (August 2026) that are not obvious from the code.
 
 Small single-file Python utilities for **Conan 1.x, targeting 1.66**. Not
 Conan 2. The tools are `conandeps.py` (dependency/binary report) and
-`conansbom.py` (CycloneDX SBOM); see `README.md` for what they do and how
+`conansbom.py` (CycloneDX/SPDX/HTML SBOM); see `README.md` for what they do and how
 they are used.
 
 ## Commands (all inside the container)
@@ -199,33 +199,59 @@ pip works too (plain PEP 517, documented in the README). pip upgrades need
 
 ## conansbom design decisions (and why)
 
-- **Own tool, CycloneDX only.** Checked 2026-09-29: Syft on a Conan 1
-  lockfile works but the lockfile has no license field and Syft does not
-  mark build requirements (duplicate purls, no scope); cyclonedx-conan is
-  archived; Conan's SBOM tool is Conan 2 only. The user needs inventory
-  *and* customer-facing license compliance and chose CycloneDX only (no
-  SPDX until a customer asks).
+- **Own tool.** Checked 2026-09-29: Syft on a Conan 1 lockfile works but
+  the lockfile has no license field and Syft does not mark build
+  requirements (duplicate purls, no scope); cyclonedx-conan is archived;
+  Conan's SBOM tool is Conan 2 only. The user needs inventory *and*
+  customer-facing license compliance.
+- **Three formats from one `Sbom`** (`--format`): CycloneDX 1.6 JSON
+  (default), SPDX 2.3 JSON (the version customer tooling reads; not 3.0),
+  and a self-contained HTML page (user's choice over Markdown/text) that
+  reuses `conandeps._CSS`/`_html_table`. Every format says the same things;
+  add a fact to the `Sbom` model, then to all three renderers.
 - **One build, one graph.** An SBOM describes a concrete build: one
   `_resolve_graph` call with the given profile/settings, no build-type
   matrix, no remote binary checks.
 - **Scope is reachability, not context.** `required` = reachable from the
   root without crossing a `build_require` edge (`_runtime_nodes`), else
   `excluded`. This works with or without a build profile and puts a build
-  tool's own requirements on the build side.
+  tool's own requirements on the build side. SPDX has no scope: the edge
+  kind (`Component.build_requires`) becomes `BUILD_DEPENDENCY_OF` vs
+  `DEPENDS_ON`, and build-only packages get a "Build only" comment.
 - **One component per reference.** A ref in both contexts is merged (it
   ships → `required`), contexts and per-context package_ids are
   properties. Two components with one purl break Dependency-Track.
-- **Licenses as declared, never mapped.** Each is `license.name` with
-  `acknowledgement: declared`. Emitting `license.id` would need the SPDX list
-  (the schema enumerates it) and would be guessing; unlicensed refs are
-  listed on stderr, never a non-zero exit (a `--require-licenses` flag is
-  the natural extension if CI wants one).
+- **Licenses as declared, classified against the embedded SPDX list.**
+  The user chose to embed the list (`_SPDX_LICENSES`/`_SPDX_EXCEPTIONS`,
+  `SPDX_LIST_VERSION`, deprecated ids included) over LicenseRef-everything.
+  `spdx_expression()` accepts known ids (case-insensitive, canonical case
+  out), `+`, AND/OR (any case), WITH + listed exception, parentheses;
+  never `LicenseRef-` (a recipe cannot supply its text). SPDX → canonical
+  expression in `licenseDeclared` / `license.id` or `expression` in
+  CycloneDX (which cannot mix entries and an expression); anything else →
+  `LicenseRef-<text>` with `hasExtractedLicensingInfos` in SPDX,
+  `license.name` in CycloneDX. A recipe tuple means AND.
+  `licenseConcluded`/`copyrightText` stay `NOASSERTION`. Unlicensed refs go
+  to stderr, never a non-zero exit (a `--require-licenses` flag is the
+  natural extension if CI wants one).
+- **Regenerating the SPDX list**: fetch `json/licenses.json` and
+  `json/exceptions.json` from
+  https://github.com/spdx/license-list-data (all ids, deprecated included),
+  write them as the two whitespace-separated blocks sorted case-insensitively
+  and wrapped at 96 columns, and bump `SPDX_LIST_VERSION`.
+  `test_embedded_spdx_list_is_current` fails when the validator's
+  license-expression knows an SPDX id the list lacks; the reverse is normal
+  (the official list is ahead of the validator). SPDX's
+  `licenseListVersion` must be `M.N`, so the patch part is dropped there.
+- **HTML links only http(s)** homepages (`_link`), so a recipe cannot
+  inject a `javascript:` URL into the page.
 - **purl per the spec's conan type**: `pkg:conan/name@version`, `user` and
   `channel` as sorted qualifiers; the purl is the bom-ref. An unnamed
   project has no purl and bom-ref `project`.
-- **Every document is schema-validated in the tests** with
-  `cyclonedx-python-lib`'s `JsonStrictValidator` (V1_6). Keep that for any
-  output change.
+- **Every document is validated in the tests**: CycloneDX with
+  `cyclonedx-python-lib`'s `JsonStrictValidator` (V1_6), SPDX with
+  `spdx-tools`' `validate_full_spdx_document`. Keep that for any output
+  change.
 
 ## Adding another tool
 

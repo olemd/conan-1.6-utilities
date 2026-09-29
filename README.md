@@ -12,7 +12,7 @@ Licensed under the [MIT License](LICENSE).
 | Tool | What it does |
 |------|--------------|
 | [`conandeps`](#conandeps) | Lists direct/indirect dependencies, checks which build types have binaries on a remote for your exact profile, shows requirement overrides and reports packages with a newer version on the remote. |
-| [`conansbom`](#conansbom) | Writes a CycloneDX SBOM of a conanfile's dependency graph: every package with its purl and declared license, build tools marked as not shipped. |
+| [`conansbom`](#conansbom) | Writes an SBOM of a conanfile's dependency graph – CycloneDX, SPDX or a readable HTML page: every package with its purl and declared license, build tools marked as not shipped. |
 
 ## conandeps
 
@@ -343,19 +343,28 @@ construction and parses those lines. A test pins the message format.
 
 ## conansbom
 
-Writes a [CycloneDX](https://cyclonedx.org/) 1.6 JSON software bill of
-materials for a `conanfile.py`, for inventory and license compliance – for
-example to hand to a customer or to load into Dependency-Track.
+Writes a software bill of materials for a `conanfile.py`, for inventory and
+license compliance – to hand to a customer, load into Dependency-Track, or
+read yourself. Three formats, all with the same content:
+
+| `--format` | What you get |
+|------------|--------------|
+| `cyclonedx` (default) | [CycloneDX](https://cyclonedx.org/) 1.6 JSON |
+| `spdx` | [SPDX](https://spdx.dev/) 2.3 JSON |
+| `html` | A self-contained page for people: a license overview, then the packages that ship and the ones only used to build. No scripts, no external assets, same look as the `conandeps` report. |
 
 ```bash
-conansbom path/to/conanfile.py -r myremote --out sbom.json
-conansbom path/to/conanfile.py -pr myprofile -s build_type=Debug > sbom.json
+conansbom path/to/conanfile.py -r myremote --out sbom.cdx.json
+conansbom path/to/conanfile.py -r myremote -f spdx --out sbom.spdx.json
+conansbom path/to/conanfile.py -r myremote -f html --out sbom.html
+conansbom path/to/conanfile.py -pr myprofile -s build_type=Debug > sbom.cdx.json
 ```
 
 | Option | Meaning |
 |--------|---------|
 | `CONANFILE` | Path to `conanfile.py` (or a directory containing one). |
 | `-r`, `-pr`, `-s`, `-o`, `-u` | As for `conandeps`: remote, profile, settings, options, `conan -u`. |
+| `-f`, `--format` | `cyclonedx` (default), `spdx` or `html`. |
 | `--out FILE` | Write the SBOM to `FILE`. Default: stdout. |
 | `-v` | Stream Conan's own output to stderr live. |
 
@@ -365,25 +374,40 @@ Conan failed to build the graph.
 
 What is in it:
 
-* **The project is the subject** (`metadata.component`), with the name,
-  version and license its conanfile declares, and the profile's settings as
-  properties, so the document says which build it describes.
-* **Every package in the graph is one component**: name, version,
+* **The project is the subject** (CycloneDX `metadata.component`, the
+  package SPDX `DESCRIBES`), with the name, version and license its
+  conanfile declares, and the profile's settings, so the document says which
+  build it describes.
+* **Every package in the graph, once**: name, version,
   [purl](https://github.com/package-url/purl-spec)
   (`pkg:conan/zlib@1.3`, with `user`/`channel` qualifiers when the package
-  has them), description, homepage (`website`) and recipe repository (`vcs`).
-* **Licenses exactly as the recipe declares them**, marked
-  `acknowledgement: declared`. Nothing is guessed or mapped. Packages whose
-  recipe declares no license are listed on stderr –
-  `conansbom: WARN: no license declared: …` – since those are the ones a
-  compliance review has to chase.
+  has them), description, homepage and recipe repository.
 * **What ships and what only builds it.** A package the project reaches
-  without crossing a build requirement has `scope: required`. A build
-  requirement, and everything only it pulls in, has `scope: excluded`
-  (CycloneDX's term for "used, but not delivered"). A package used both ways
-  ships, so it is `required`. It is still one component, with its Conan
-  contexts and each context's package_id as properties.
+  without crossing a build requirement ships. A build requirement, and
+  everything only it pulls in, does not. CycloneDX says so with
+  `scope: required` / `scope: excluded` ("used, but not delivered"); SPDX,
+  which has no scope, with a `BUILD_DEPENDENCY_OF` relationship instead of
+  `DEPENDS_ON` and a "Build only" comment. A package used both ways ships.
+  It is still listed once (in CycloneDX with its Conan contexts and each
+  context's package_id as properties).
 * **The full dependency graph**, build-requirement edges included.
+* **Licenses exactly as the recipe declares them.** Nothing is guessed or
+  inferred from source code. A declared license that is an SPDX identifier
+  or expression (`MIT`, `mit`, `MIT OR Apache-2.0`,
+  `GPL-2.0-or-later WITH Classpath-exception-2.0`) is written as one, in the
+  SPDX list's spelling: `license.id` or an `expression` in CycloneDX,
+  `licenseDeclared` in SPDX. Anything else (`Proprietary`, `ACME EULA`) is
+  kept verbatim: a named license in CycloneDX, and in SPDX a `LicenseRef-`
+  whose text is the declared string. A tuple of licenses in a recipe means
+  all of them apply (`AND`). SPDX's `licenseConcluded` and `copyrightText`
+  are `NOASSERTION` – the tool concludes nothing.
+* **Missing licenses are flagged.** Packages whose recipe declares no license
+  are listed on stderr – `conansbom: WARN: no license declared: …` – and in
+  red in the HTML page, since those are the ones a compliance review has to
+  chase.
+
+The SPDX license list (currently 3.29.0) is embedded, so the tool works
+offline.
 
 Components are sorted by reference, so two SBOMs of the same project diff
 cleanly.

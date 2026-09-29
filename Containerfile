@@ -10,7 +10,7 @@ LABEL org.opencontainers.image.created="${BUILD_DATE}" \
 RUN printf 'build_date=%s\ngit_revision=%s\n' "${BUILD_DATE}" "${GIT_REVISION}" > /etc/build-info
 
 RUN pip install --no-cache-dir --root-user-action=ignore \
-        "conan==1.66.0" "cyclonedx-python-lib[json-validation]" pytest ruff shellcheck-py uv
+        "conan==1.66.0" "cyclonedx-python-lib[json-validation]" pytest ruff shellcheck-py spdx-tools uv
 
 # Non-root user so files created in the mounted workdir are owned by the caller.
 RUN useradd -m -u 1000 dev
