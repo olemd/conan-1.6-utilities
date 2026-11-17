@@ -446,7 +446,7 @@ or from a checkout (`uv run conansbom.py …`).
 Tagged releases with a built wheel, source distribution and `SHA256SUMS` are
 published on the
 [releases page](https://kode.naiv.no/olemd/conan-1.6-utilities/releases).
-Latest: [v0.5.0](https://kode.naiv.no/olemd/conan-1.6-utilities/releases/tag/v0.5.0).
+Latest: [v0.6.0](https://kode.naiv.no/olemd/conan-1.6-utilities/releases/tag/v0.6.0).
 
 Install a specific release with
 
