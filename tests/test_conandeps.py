@@ -522,12 +522,9 @@ def test_html_render(report):
         + button % ("libdeep", r"libdeep/1\.0"),
         tree_tab,
     )
-    # libbar lacks Debug and RelWithDebInfo binaries: red in the tree, both named.
-    assert re.search(
-        r'data-name="libbar" aria-pressed="false" class="missing" '
-        r'title="no binary anywhere: Debug, RelWithDebInfo"',
-        tree_tab,
-    )
+    # libbar lacks Debug and RelWithDebInfo binaries: red in the tree, no tooltip.
+    assert 'data-name="libbar" aria-pressed="false" class="missing">' in tree_tab
+    assert "title=" not in tree_tab
 
 
 def test_tree_marks_problems_and_nests_paths():
@@ -544,26 +541,20 @@ def test_tree_marks_problems_and_nests_paths():
     root = conandeps._tree(_mini_report(deps, package="A/1.0"))
     assert root.label == "A/1.0" and [c.name for c in root.children] == ["B", "C"]
     b, c = root.children
-    assert (b.status, b.problem_bts, b.children) == ("missing", ["Release"], [])
+    assert (b.status, b.children) == ("missing", [])
     assert c.status is None and [d.name for d in c.children] == ["D"]
     assert c.children[0].status == "cacheonly"
 
     page = conandeps._tree_html(root)
     assert '<button type="button" data-name="C" aria-pressed="false">C/1.0</button>' in page
-    assert (
-        'data-name="B" aria-pressed="false" class="missing" title="no binary anywhere: Release">'
-        in page
-    )
-    assert (
-        'data-name="D" aria-pressed="false" class="cacheonly" title="local cache only: Release">'
-        in page
-    )
+    assert 'data-name="B" aria-pressed="false" class="missing">B/1.0</button>' in page
+    assert 'data-name="D" aria-pressed="false" class="cacheonly">D/1.0</button>' in page
     # D sits under C, not under B: outlining walks exactly this nesting.
     assert re.search(r'data-name="C"[^<]*</button><ul><li><button[^>]*data-name="D"', page)
 
     both = _mini_dep("E/1.0", direct=True)
     both.binaries = {"Debug": ("CacheOnly", "f" * 40, None), "Release": ("Missing", "f" * 40, None)}
-    assert conandeps._tree_status(both) == ("missing", ["Release"])
+    assert conandeps._tree_status(both) == "missing"
 
 
 def test_cli_exit_code(conan_env, tmp_path, capsys):

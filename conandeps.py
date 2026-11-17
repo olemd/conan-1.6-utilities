@@ -720,19 +720,20 @@ class _TreeNode:
     name: str  # what a click matches on: every node with this name is outlined
     # "missing" / "cacheonly" when some build type has that problem, else None.
     status: Optional[str] = None
-    # Build types with that problem, spelled out in the node's tooltip.
-    problem_bts: List[str] = field(default_factory=list)
     note: str = ""  # "cycle" / "not in graph"
     children: List["_TreeNode"] = field(default_factory=list)
 
 
-def _tree_status(dep: Dep) -> Tuple[Optional[str], List[str]]:
-    """The tree's problem marking: missing wins over cache-only (it is worse)."""
+def _tree_status(dep: Dep) -> Optional[str]:
+    """The tree's problem marking: missing wins over cache-only (it is worse).
+
+    Which build types are affected is left to the dependency table.
+    """
+    statuses = {s for s, _, _ in dep.binaries.values()}
     for status, cls in (("Missing", "missing"), ("CacheOnly", "cacheonly")):
-        bts = [bt for bt, (s, _, _) in dep.binaries.items() if s == status]
-        if bts:
-            return cls, bts
-    return None, []
+        if status in statuses:
+            return cls
+    return None
 
 
 def _tree(report: Report) -> _TreeNode:
@@ -751,8 +752,7 @@ def _tree(report: Report) -> _TreeNode:
         dep = by_name.get(name)
         if dep is None:
             return _TreeNode(name, name, note="not in graph")
-        status, bts = _tree_status(dep)
-        node = _TreeNode(dep.ref, name, status, bts)
+        node = _TreeNode(dep.ref, name, _tree_status(dep))
         if name in seen:
             node.note = "cycle"
             return node
@@ -1247,16 +1247,12 @@ def _html_table(headers: List[str], rows: List[List[str]]) -> str:
 def _tree_html(node: _TreeNode, top: bool = True) -> str:
     """The hierarchy as nested lists of buttons, for ``_TREE_JS`` to outline.
 
-    A problem node reuses the table cells' class (colour plus a glyph) and
-    names the affected build types in its tooltip, so colour is never the
-    only signal.
+    A problem node reuses the table cells' class, colour plus a glyph, so
+    colour is never the only signal.  No tooltip: it did not show for the
+    user, and the table already names the affected build types.
     """
     e = html.escape
-    attrs = ""
-    if node.status:
-        reason = _MARK["CacheOnly"] if node.status == "cacheonly" else _reason("Missing")
-        tip = "%s: %s" % (reason, ", ".join(node.problem_bts))
-        attrs = ' class="%s" title="%s"' % (node.status, e(tip))
+    attrs = ' class="%s"' % node.status if node.status else ""
     item = '<button type="button" data-name="%s" aria-pressed="false"%s>%s</button>' % (
         e(node.name),
         attrs,
