@@ -522,9 +522,15 @@ def test_html_render(report):
         + button % ("libdeep", r"libdeep/1\.0"),
         tree_tab,
     )
-    # libbar lacks Debug and RelWithDebInfo binaries: red in the tree, no tooltip.
-    assert 'data-name="libbar" aria-pressed="false" class="missing">' in tree_tab
-    assert "title=" not in tree_tab
+    # libbar lacks Debug and RelWithDebInfo binaries: red in the tree, and its
+    # tooltip spells out every build type in the table cells' words.
+    libbar = re.search(
+        r'data-name="libbar" aria-pressed="false" class="missing" title="([^"]*)"', tree_tab
+    )
+    assert libbar and "Debug: MISSING" in libbar[1] and "RelWithDebInfo: MISSING" in libbar[1]
+    assert "Release: test" in libbar[1]
+    # Every package has one, so hovering never looks broken; the root has none.
+    assert tree_tab.count('<button type="button" data-name=') == tree_tab.count(" title=") + 1
 
 
 def test_tree_marks_problems_and_nests_paths():
@@ -546,9 +552,12 @@ def test_tree_marks_problems_and_nests_paths():
     assert c.children[0].status == "cacheonly"
 
     page = conandeps._tree_html(root)
-    assert '<button type="button" data-name="C" aria-pressed="false">C/1.0</button>' in page
-    assert 'data-name="B" aria-pressed="false" class="missing">B/1.0</button>' in page
-    assert 'data-name="D" aria-pressed="false" class="cacheonly">D/1.0</button>' in page
+    assert 'data-name="C" aria-pressed="false" title="Release: test">C/1.0</button>' in page
+    assert 'data-name="B" aria-pressed="false" class="missing" title="Release: MISSING">' in page
+    assert (
+        'data-name="D" aria-pressed="false" class="cacheonly" title="Release: local cache only">'
+        in page
+    )
     # D sits under C, not under B: outlining walks exactly this nesting.
     assert re.search(r'data-name="C"[^<]*</button><ul><li><button[^>]*data-name="D"', page)
 

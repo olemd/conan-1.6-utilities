@@ -720,6 +720,8 @@ class _TreeNode:
     name: str  # what a click matches on: every node with this name is outlined
     # "missing" / "cacheonly" when some build type has that problem, else None.
     status: Optional[str] = None
+    # Binary status per build type, in the table cells' words (the tooltip).
+    tip: str = ""
     note: str = ""  # "cycle" / "not in graph"
     children: List["_TreeNode"] = field(default_factory=list)
 
@@ -739,10 +741,13 @@ def _tree_status(dep: Dep) -> Optional[str]:
 def _tree(report: Report) -> _TreeNode:
     """Build the dependency hierarchy as nested nodes.
 
-    The only annotation is the problem marking (missing / local cache only),
-    which the user asked for so problems stand out in the hierarchy; paths,
-    context, overrides and version ranges stay in the report's tables.
-    Names resolve host-context-first, and a cycle stops the walk.
+    The annotations are the problem marking (missing / local cache only),
+    which the user asked for so problems stand out in the hierarchy, and a
+    tooltip with the binary status per build type on *every* package: with
+    one only on problem packages, hovering an available one showed nothing
+    and read as broken.  Paths, context, overrides and version ranges stay
+    in the report's tables.  Names resolve host-context-first, and a cycle
+    stops the walk.
     """
     by_name = {}
     for dep in report.deps.values():
@@ -752,7 +757,12 @@ def _tree(report: Report) -> _TreeNode:
         dep = by_name.get(name)
         if dep is None:
             return _TreeNode(name, name, note="not in graph")
-        node = _TreeNode(dep.ref, name, _tree_status(dep))
+        # binaries[bt] is (status, package_id, remote), _cell's first arguments.
+        tip = "; ".join(
+            "%s: %s" % (bt, _cell(*dep.binaries[bt], _Palette(False), dep.fallbacks.get(bt)))
+            for bt in report.build_types
+        )
+        node = _TreeNode(dep.ref, name, _tree_status(dep), tip)
         if name in seen:
             node.note = "cycle"
             return node
@@ -1248,11 +1258,13 @@ def _tree_html(node: _TreeNode, top: bool = True) -> str:
     """The hierarchy as nested lists of buttons, for ``_TREE_JS`` to outline.
 
     A problem node reuses the table cells' class, colour plus a glyph, so
-    colour is never the only signal.  No tooltip: it did not show for the
-    user, and the table already names the affected build types.
+    colour is never the only signal.  Every package's tooltip is its
+    binary status per build type (``_TreeNode.tip``).
     """
     e = html.escape
     attrs = ' class="%s"' % node.status if node.status else ""
+    if node.tip:
+        attrs += ' title="%s"' % e(node.tip)
     item = '<button type="button" data-name="%s" aria-pressed="false"%s>%s</button>' % (
         e(node.name),
         attrs,
@@ -1385,7 +1397,8 @@ def render_html(report: Report) -> str:
         '<p class="note">Click a package to outline every path from the conanfile to it '
         "and to list just those paths in the panel; click it again to clear. "
         '<span class="missing">red</span> means a binary is missing, '
-        '<span class="cacheonly">orange</span> that it is only in the local cache.</p>'
+        '<span class="cacheonly">orange</span> that it is only in the local cache. '
+        "Hover any package for its binary status per build type.</p>"
     )
     # Large trees do not fit on a screen, so the selected package's paths
     # are also shown on their own in a panel that stays in view (_TREE_JS
