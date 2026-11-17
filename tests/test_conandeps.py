@@ -486,15 +486,75 @@ def test_html_render(report):
     assert page.startswith("<!DOCTYPE html>")
     # dependencies, overrides, update order - nothing repeats the first one
     assert page.count("<table>") == 3
-    # The tree is structure only; every annotation lives in a table.
-    tree = page.split("<h2>Dependency hierarchy</h2>")[1]
-    # The fixture's consumer is named, so the root is the package, not the path.
-    assert tree.startswith("<pre>myproject/0.1\n|-- ")
     assert "<td>3</td><td>myproject/0.1</td>" in page  # last update-order wave
-    assert "|-- libfoo/1.0\n|   `-- libbar/1.1\n|       `-- libdeep/1.0\n" in tree
-    assert "[" not in tree and "<span" not in tree
     assert 'class="explicit"' in page and 'class="implicit"' in page
-    assert "<script" not in page  # self-contained, static
+
+    # Two tabs; the bar is hidden until the script runs, so without scripts
+    # both panels show.  The tables are in the report tab, the tree in its own.
+    assert '<div role="tablist" aria-label="Report views" hidden>' in page
+    report_tab = page.split('<section id="tab-report"')[1].split("</section>")[0]
+    tree_tab = page.split('<section id="tab-tree"')[1].split("</section>")[0]
+    assert report_tab.count("<table>") == 3 and "<table>" not in tree_tab
+    assert '<ul class="tree" id="tree">' in tree_tab
+    # Self-contained: the script is inline and nothing is fetched.
+    assert "<script>" in page and " src=" not in page and " href=" not in page
+
+    # The fixture's consumer is named, so the root is the package, not the
+    # path; nesting follows the graph.
+    button = r'<button type="button" data-name="%s" aria-pressed="false"[^>]*>%s</button>'
+    assert re.search(
+        r'<ul class="tree" id="tree"><li>'
+        + button % ("myproject/0.1", r"myproject/0\.1")
+        + r"<ul>.*?<li>"
+        + button % ("libfoo", r"libfoo/1\.0")
+        + r"<ul><li>"
+        + button % ("libbar", r"libbar/1\.1")
+        + r"<ul><li>"
+        + button % ("libdeep", r"libdeep/1\.0"),
+        tree_tab,
+    )
+    # libbar lacks Debug and RelWithDebInfo binaries: red in the tree, both named.
+    assert re.search(
+        r'data-name="libbar" aria-pressed="false" class="missing" '
+        r'title="no binary anywhere: Debug, RelWithDebInfo"',
+        tree_tab,
+    )
+
+
+def test_tree_marks_problems_and_nests_paths():
+    """The user's example: A uses B and C, C uses D.
+
+    B is missing (red), D is only in the local cache (orange), C is fine.
+    A package both missing and cache-only is marked as missing, the worse one.
+    """
+    deps = {
+        "B#host": _mini_dep("B/1.0", direct=True, status="Missing"),
+        "C#host": _mini_dep("C/1.0", direct=True, requires=["D"]),
+        "D#host": _mini_dep("D/1.0", paths=[["C"]], status="CacheOnly"),
+    }
+    root = conandeps._tree(_mini_report(deps, package="A/1.0"))
+    assert root.label == "A/1.0" and [c.name for c in root.children] == ["B", "C"]
+    b, c = root.children
+    assert (b.status, b.problem_bts, b.children) == ("missing", ["Release"], [])
+    assert c.status is None and [d.name for d in c.children] == ["D"]
+    assert c.children[0].status == "cacheonly"
+
+    page = conandeps._tree_html(root)
+    assert '<button type="button" data-name="C" aria-pressed="false">C/1.0</button>' in page
+    assert (
+        'data-name="B" aria-pressed="false" class="missing" title="no binary anywhere: Release">'
+        in page
+    )
+    assert (
+        'data-name="D" aria-pressed="false" class="cacheonly" title="local cache only: Release">'
+        in page
+    )
+    # D sits under C, not under B: outlining walks exactly this nesting.
+    assert re.search(r'data-name="C"[^<]*</button><ul><li><button[^>]*data-name="D"', page)
+
+    both = _mini_dep("E/1.0", direct=True)
+    both.binaries = {"Debug": ("CacheOnly", "f" * 40, None), "Release": ("Missing", "f" * 40, None)}
+    assert conandeps._tree_status(both) == ("missing", ["Release"])
 
 
 def test_cli_exit_code(conan_env, tmp_path, capsys):

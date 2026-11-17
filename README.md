@@ -236,18 +236,24 @@ There is no separate list of missing binaries or newer versions: the cells
 above are that list. The terminal output still lists the missing binaries,
 since that is what a CI log needs.
 
-The **dependency hierarchy** at the end of the page shows the same graph as a
-plain tree. It carries no annotations, since everything about a package is in
-the table:
+The **Dependency tree** tab shows the same graph as a tree:
 
 ```
 myproject/1.2
-|-- MyDepA/1.0
-|   `-- boost/1.8
-`-- MyDepB/1.0
-    `-- Zigma/1.0
-        `-- boost/1.8
+├─ MyDepA/1.0
+│  └─ boost/1.8
+└─ MyDepB/1.0
+   └─ Zigma/1.0
+      └─ boost/1.8
 ```
+
+Click a package to outline every path from your conanfile to it: clicking
+`Zigma` outlines `myproject → MyDepB → Zigma`, and clicking `boost` outlines both
+of its paths. Click it again to clear. A package with a missing binary is
+red (✗), and one only in your local cache is orange (⚠). Hover it to see
+which build types are affected. Nothing else is annotated, since everything
+else about a package is in the table. Link to the tab with `report.html#tree`.
+Without JavaScript, both tabs simply show one after the other.
 
 The **overrides** table lists what was rewritten. An override is credited to the
 package that forced it, which for your own project is the name and version in

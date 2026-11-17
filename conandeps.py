@@ -712,39 +712,59 @@ _MARK = {
 }
 
 
-def _tree_rows(report: Report) -> List[str]:
-    """Build the dependency hierarchy as indented lines, structure only.
+@dataclass
+class _TreeNode:
+    """One line of the dependency hierarchy (see ``_tree``)."""
 
-    Deliberately carries no annotations: paths, context, overrides, version
-    ranges and missing binaries are all in the report's tables already, and
-    repeating them here made the tree the noisiest part of the page.
+    label: str  # the reference, or the conanfile's package/path for the root
+    name: str  # what a click matches on: every node with this name is outlined
+    # "missing" / "cacheonly" when some build type has that problem, else None.
+    status: Optional[str] = None
+    # Build types with that problem, spelled out in the node's tooltip.
+    problem_bts: List[str] = field(default_factory=list)
+    note: str = ""  # "cycle" / "not in graph"
+    children: List["_TreeNode"] = field(default_factory=list)
+
+
+def _tree_status(dep: Dep) -> Tuple[Optional[str], List[str]]:
+    """The tree's problem marking: missing wins over cache-only (it is worse)."""
+    for status, cls in (("Missing", "missing"), ("CacheOnly", "cacheonly")):
+        bts = [bt for bt, (s, _, _) in dep.binaries.items() if s == status]
+        if bts:
+            return cls, bts
+    return None, []
+
+
+def _tree(report: Report) -> _TreeNode:
+    """Build the dependency hierarchy as nested nodes.
+
+    The only annotation is the problem marking (missing / local cache only),
+    which the user asked for so problems stand out in the hierarchy; paths,
+    context, overrides and version ranges stay in the report's tables.
+    Names resolve host-context-first, and a cycle stops the walk.
     """
     by_name = {}
     for dep in report.deps.values():
         by_name.setdefault(dep.name, dep)  # host first (insertion order), build ok as fallback
-    rows: List[str] = []
 
-    def walk(name: str, prefix: str, last: bool, seen: Tuple[str, ...]):
+    def walk(name: str, seen: Tuple[str, ...]) -> _TreeNode:
         dep = by_name.get(name)
-        branch = "`-- " if last else "|-- "
         if dep is None:
-            rows.append(prefix + branch + name + "  (not in graph)")
-            return
+            return _TreeNode(name, name, note="not in graph")
+        status, bts = _tree_status(dep)
+        node = _TreeNode(dep.ref, name, status, bts)
         if name in seen:
-            rows.append(prefix + branch + dep.ref + "  (cycle)")
-            return
-        rows.append(prefix + branch + dep.ref)
-        child_prefix = prefix + ("    " if last else "|   ")
-        for i, child in enumerate(dep.requires):
-            walk(child, child_prefix, i == len(dep.requires) - 1, seen + (name,))
+            node.note = "cycle"
+            return node
+        node.children = [walk(child, seen + (name,)) for child in dep.requires]
+        return node
 
-    roots = [d.name for d in report.deps.values() if d.direct]
     # The root is named like the rest of the report: by the package the
     # conanfile declares, or by its path when it declares neither.
-    rows.append(report.package or report.conanfile)
-    for i, name in enumerate(roots):
-        walk(name, "", i == len(roots) - 1, ())
-    return rows
+    label = report.package or report.conanfile
+    root = _TreeNode(label, label)
+    root.children = [walk(d.name, ()) for d in report.deps.values() if d.direct]
+    return root
 
 
 def _update_order(report: Report) -> List[Step]:
@@ -759,7 +779,7 @@ def _update_order(report: Report) -> List[Step]:
 
     A step's wave is one past the deepest requirement it waits for, so every
     step in a wave can be done in parallel and your conanfile always comes
-    last.  Names are resolved host-context-first exactly like ``_tree_rows``,
+    last.  Names are resolved host-context-first exactly like ``_tree``,
     and a cycle (which Conan rejects, but the renderers defend against
     anyway) stops the walk instead of recursing forever.
     """
@@ -804,7 +824,7 @@ def _update_order(report: Report) -> List[Step]:
     direct = [d.name for d in report.deps.values() if d.direct]
     steps.append(
         Step(
-            report.package or report.conanfile,  # as in _tree_rows
+            report.package or report.conanfile,  # as in _tree
             max(s.wave for s in steps) + 1,
             "bump requirements",
             None,
@@ -1046,10 +1066,93 @@ th{background:#eee}code{font-size:.95em}
 .note{color:#555;max-width:60em;font-size:.92em}
 .explicit{color:#1b4e8a;font-weight:700}.implicit{color:#555}
 pre{background:#f5f5f5;padding:1rem;overflow-x:auto}
+[hidden]{display:none!important}
+[role=tablist]{display:flex;gap:.25rem;border-bottom:1px solid #bbb;margin:1rem 0}
+[role=tab]{font:inherit;color:inherit;background:#eee;border:1px solid #bbb;border-bottom:0;
+padding:.4rem .9rem;cursor:pointer;margin-bottom:-1px}
+[role=tab][aria-selected=true]{background:#fff;font-weight:700;border-bottom:1px solid #fff}
+.tree,.tree ul{list-style:none;margin:0;padding:0}
+.tree{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.95em}
+.tree ul{margin-left:.7rem;padding-left:1rem;border-left:1px solid #bbb}
+.tree li{margin:.15rem 0}
+:where(.tree) button{font:inherit;color:inherit;background:none;border:0;padding:0 .25rem;
+cursor:pointer;text-align:left}
+.tree .onpath,.tree .sel{outline:2px solid currentColor;outline-offset:1px}
+.tree .sel{font-weight:700;background:#f0f0f0}
+button:focus-visible{outline:3px solid #1b4e8a!important;outline-offset:2px}
 @media (prefers-color-scheme:dark){body{background:#111;color:#eee}th{background:#222}
 th,td{border-color:#444}pre{background:#1c1c1c}.ok{color:#6fd66f}.missing{color:#ff7b7b}
 .cacheonly{color:#ffc857}.new{color:#ffc857}.explicit{color:#8ab8f0}
-.na,.old,.implicit,.note{color:#999}}
+.na,.old,.implicit,.note{color:#999}
+[role=tablist],[role=tab],.tree ul{border-color:#444}[role=tab]{background:#222}
+[role=tab][aria-selected=true]{background:#111;border-bottom-color:#111}
+.tree .sel{background:#2a2a2a}button:focus-visible{outline-color:#8ab8f0!important}}
+"""
+
+# Tabs and path outlining for the HTML report.  Inline so the page stays a
+# single self-contained file.  Progressive enhancement: the tab bar starts
+# hidden and both panels are visible, so a viewer that strips scripts still
+# shows everything, just stacked.
+#
+# Outlining: a click on a package selects every node with that name (a
+# package required by several parents appears several times in the tree, and
+# each occurrence is a path from the conanfile) and outlines the ancestors of
+# each one, walking li -> enclosing li.  Siblings and children are never
+# touched, so clicking the root outlines only the root.  A second click on
+# the selected package clears the outline.
+_TREE_JS = """
+(function () {
+  var tabs = [].slice.call(document.querySelectorAll('[role=tab]'));
+  function remember(tab) {
+    try { history.replaceState(null, '', '#' + tab.dataset.hash); } catch (err) {}
+  }
+  function show(tab, focus) {
+    tabs.forEach(function (t) {
+      var on = t === tab;
+      t.setAttribute('aria-selected', on ? 'true' : 'false');
+      t.tabIndex = on ? 0 : -1;
+      document.getElementById(t.getAttribute('aria-controls')).hidden = !on;
+    });
+    if (focus) tab.focus();
+  }
+  tabs.forEach(function (t, i) {
+    t.addEventListener('click', function () { show(t); remember(t); });
+    t.addEventListener('keydown', function (ev) {
+      var j = {ArrowLeft: i - 1, ArrowRight: i + 1, Home: 0, End: tabs.length - 1}[ev.key];
+      if (j === undefined) return;
+      ev.preventDefault();
+      var next = tabs[(j + tabs.length) % tabs.length];
+      show(next, true);
+      remember(next);
+    });
+  });
+  document.querySelector('[role=tablist]').hidden = false;
+  var start = tabs.filter(function (t) { return '#' + t.dataset.hash === location.hash; })[0];
+  show(start || tabs[0]);
+
+  var tree = document.getElementById('tree');
+  var current = null;
+  tree.addEventListener('click', function (ev) {
+    var button = ev.target.closest('button[data-name]');
+    if (!button) return;
+    [].forEach.call(tree.querySelectorAll('.sel, .onpath'), function (b) {
+      b.classList.remove('sel', 'onpath');
+      b.setAttribute('aria-pressed', 'false');
+    });
+    var name = button.dataset.name;
+    if (current === name) { current = null; return; }
+    current = name;
+    [].forEach.call(tree.querySelectorAll('button[data-name]'), function (b) {
+      if (b.dataset.name !== name) return;
+      b.classList.add('sel');
+      b.setAttribute('aria-pressed', 'true');
+      for (var li = b.parentElement.parentElement.closest('li'); li;
+           li = li.parentElement.closest('li')) {
+        li.querySelector(':scope > button').classList.add('onpath');
+      }
+    });
+  });
+})();
 """
 
 
@@ -1077,6 +1180,32 @@ def _html_table(headers: List[str], rows: List[List[str]]) -> str:
     return "<table><tr>%s</tr>%s</table>" % (head, body)
 
 
+def _tree_html(node: _TreeNode, top: bool = True) -> str:
+    """The hierarchy as nested lists of buttons, for ``_TREE_JS`` to outline.
+
+    A problem node reuses the table cells' class (colour plus a glyph) and
+    names the affected build types in its tooltip, so colour is never the
+    only signal.
+    """
+    e = html.escape
+    attrs = ""
+    if node.status:
+        reason = _MARK["CacheOnly"] if node.status == "cacheonly" else _reason("Missing")
+        tip = "%s: %s" % (reason, ", ".join(node.problem_bts))
+        attrs = ' class="%s" title="%s"' % (node.status, e(tip))
+    item = '<button type="button" data-name="%s" aria-pressed="false"%s>%s</button>' % (
+        e(node.name),
+        attrs,
+        e(node.label),
+    )
+    if node.note:
+        item += ' <span class="na">(%s)</span>' % e(node.note)
+    if node.children:
+        item += "<ul>%s</ul>" % "".join(_tree_html(c, top=False) for c in node.children)
+    item = "<li>%s</li>" % item
+    return '<ul class="tree" id="tree">%s</ul>' % item if top else item
+
+
 def render_html(report: Report) -> str:
     e = html.escape
     parts: List[str] = []
@@ -1091,6 +1220,17 @@ def render_html(report: Report) -> str:
     w("<h1>conandeps report</h1>")
     header = _header(report, with_conanfile=True)
     w("<p>%s</p>" % "<br>".join("<b>%s:</b> %s" % (e(k), e(v)) for k, v in header))
+
+    # Two tabs: the tables, and the interactive tree.  The tab bar is hidden
+    # until _TREE_JS runs, so without scripts both panels show stacked.
+    w('<div role="tablist" aria-label="Report views" hidden>')
+    for key, label in (("report", "Report"), ("tree", "Dependency tree")):
+        w(
+            '<button type="button" role="tab" id="tabbtn-%s" aria-controls="tab-%s" '
+            'data-hash="%s">%s</button>' % (key, key, key, label)
+        )
+    w("</div>")
+    w('<section id="tab-report" role="tabpanel" aria-labelledby="tabbtn-report">')
 
     # ---- dependencies ----------------------------------------------------
     w("<h2>Dependencies (%d) and binary availability</h2>" % len(report.deps))
@@ -1177,7 +1317,20 @@ def render_html(report: Report) -> str:
     else:
         w('<p class="ok">Nothing to update.</p>')
 
-    w("<h2>Dependency hierarchy</h2><pre>%s</pre>" % e("\n".join(_tree_rows(report))))
+    w("</section>")
+
+    w('<section id="tab-tree" role="tabpanel" aria-labelledby="tabbtn-tree">')
+    w("<h2>Dependency hierarchy</h2>")
+    w(
+        '<p class="note">Click a package to outline every path from the conanfile to it; '
+        "click it again to clear. "
+        '<span class="missing">red</span> means a binary is missing, '
+        '<span class="cacheonly">orange</span> that it is only in the local cache; '
+        "hover a marked package for the build types.</p>"
+    )
+    w(_tree_html(_tree(report)))
+    w("</section>")
+    w("<script>%s</script>" % _TREE_JS)
     w("</body></html>")
     return "".join(parts)
 

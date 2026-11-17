@@ -81,10 +81,20 @@ pip works too (plain PEP 517, documented in the README). pip upgrades need
   one place for per-package facts: availability cells (package_id as
   tooltip), `newest` (update note and both export dates as tooltip) and the
   version range (package cell tooltip). There is deliberately no HTML
-  "Missing binaries" or "Newer versions" section, and `_tree_rows()` yields
-  plain structure lines with no tags. The user asked for this to cut
-  duplication; do not add annotations back to the tree or a section that
-  repeats table cells. (The text summary keeps its missing-binaries list.)
+  "Missing binaries" or "Newer versions" section. The user asked for this to cut
+  duplication; do not add a section that repeats table cells. (The text
+  summary keeps its missing-binaries list.)
+- **The tree is its own, interactive tab.** The page has two ARIA tabs,
+  Report (the tables) and Dependency tree. `_tree()` builds `_TreeNode`s,
+  `_tree_html()` renders nested `<ul>`s of buttons, and the inline
+  `_TREE_JS` switches tabs (`#tree` opens the tree) and, on click, outlines
+  every path from the root to *every* occurrence of that package – its
+  ancestors only, never siblings or children. The one annotation the user
+  wanted in the tree is the problem marking: red/✗ `missing` (wins) or
+  orange/⚠ `cacheonly`, reusing the table cells' classes, with the build
+  types as tooltip. Add nothing else to it. Progressive enhancement: the tab
+  bar starts `hidden`, so without scripts both panels show stacked. The JS
+  is checked manually in a browser (no JS runner in the tests).
 - **Only the remote counts, and the source is always shown.** Conan says
   `Cache` for a locally cached binary without asking the remote, so
   `_RemoteIndex` verifies cache hits with `search_packages` on the remote.
@@ -124,7 +134,7 @@ pip works too (plain PEP 517, documented in the README). pip upgrades need
   the new reference to reach the root, even at its own newest version), then
   gives each package a wave one past its deepest blocker, so a wave is
   parallelisable and the conanfile is always last. Names resolve
-  host-context-first like `_tree_rows`, and cycles stop the walk. It is
+  host-context-first like `_tree`, and cycles stop the walk. It is
   derived data: a function over `Report`, not a field on it.
 - **Overrides are parsed from Conan's WARN output.** Conan 1 does not record
   overrides on the graph; `Requirements.update()` mutates `req.ref` in place
@@ -179,7 +189,7 @@ pip works too (plain PEP 517, documented in the README). pip upgrades need
   for ids. Also: `_conan()` in the tests raises with Conan's full output on
   failure – read it before guessing.
 - **Use the `conan_env` fixture only for graph/remote behaviour.** Anything
-  about rendering (`_via`, `_table`, `_tree_rows`, HTML) should be a
+  about rendering (`_via`, `_table`, `_tree`, HTML) should be a
   fixture-free unit test on hand-built `Dep` objects, like
   `test_via_lists_every_parent_path` – instant, and no `conan_server`.
 - Dependencies: `uv.lock` is committed; regenerate with `./dev.sh uv lock`
