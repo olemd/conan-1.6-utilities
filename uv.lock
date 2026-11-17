@@ -376,7 +376,7 @@ sdist = { url = "https://files.pythonhosted.org/packages/ee/e8/0893952ee0c0f7810
 
 [[package]]
 name = "conan-utils"
-version = "0.6.1"
+version = "0.6.2"
 source = { editable = "." }
 dependencies = [
     { name = "conan" },
