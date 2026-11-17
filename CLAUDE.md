@@ -91,9 +91,10 @@ pip works too (plain PEP 517, documented in the README). pip upgrades need
   every path from the root to *every* occurrence of that package – its
   ancestors only, never siblings or children. The one annotation the user
   wanted in the tree is the problem marking: red/✗ `missing` (wins) or
-  orange/⚠ `cacheonly`, reusing the table cells' classes. No tooltip: the
-  user found it did not show for them and had it removed; the table names
-  the affected build types. Add nothing else to it. Progressive enhancement: the tab
+  orange/⚠ `cacheonly`, reusing the table cells' classes. No tooltip: in
+  v0.6.1 the build-type `title` showed on orange nodes but not on red ones
+  (cause not found; table tooltips work), so the user had it removed; the
+  table names the affected build types. Add nothing else to it. Progressive enhancement: the tab
   bar starts `hidden`, so without scripts both panels show stacked. The JS
   is checked manually in a browser (no JS runner in the tests).
   Real trees are taller than a screen, so the selection is also shown in a
