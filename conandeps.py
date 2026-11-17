@@ -1389,8 +1389,7 @@ def render_html(report: Report) -> str:
         '<p class="note">Click a package to outline every path from the conanfile to it '
         "and to list just those paths in the panel; click it again to clear. "
         '<span class="missing">red</span> means a binary is missing, '
-        '<span class="cacheonly">orange</span> that it is only in the local cache; '
-        "hover a marked package for the build types.</p>"
+        '<span class="cacheonly">orange</span> that it is only in the local cache.</p>'
     )
     # Large trees do not fit on a screen, so the selected package's paths
     # are also shown on their own in a panel that stays in view (_TREE_JS

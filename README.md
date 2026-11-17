@@ -253,8 +253,8 @@ of its paths. Click it again to clear. Since a real tree rarely fits on one
 screen, the selected package's paths are also shown on their own in a panel to
 the right, which stays in view while you scroll. Clicking a package in the
 panel selects that one instead. A package with a missing binary is
-red (✗), and one only in your local cache is orange (⚠). Hover it to see
-which build types are affected. Nothing else is annotated, since everything
+red (✗), and one only in your local cache is orange (⚠); the table says
+for which build types. Nothing else is annotated, since everything
 else about a package is in the table. Link to the tab with `report.html#tree`.
 Without JavaScript, both tabs simply show one after the other.
 
