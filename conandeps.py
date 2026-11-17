@@ -1100,7 +1100,8 @@ box-sizing:border-box;border:1px solid #bbb;padding:.75rem}
 margin-top:.75rem;padding:.2rem .8rem;cursor:pointer}
 @media (max-width:60em){.treeview.split{display:block}
 .paths{position:static;max-height:none;margin-bottom:1rem}}
-button:focus-visible{outline:3px solid #1b4e8a!important;outline-offset:2px}
+a.pkg{color:inherit;text-decoration:underline;text-underline-offset:.15em}
+button:focus-visible,a:focus-visible{outline:3px solid #1b4e8a!important;outline-offset:2px}
 @media (prefers-color-scheme:dark){body{background:#111;color:#eee}th{background:#222}
 th,td{border-color:#444}pre{background:#1c1c1c}.ok{color:#6fd66f}.missing{color:#ff7b7b}
 .cacheonly{color:#ffc857}.new{color:#ffc857}.explicit{color:#8ab8f0}
@@ -1108,7 +1109,8 @@ th,td{border-color:#444}pre{background:#1c1c1c}.ok{color:#6fd66f}.missing{color:
 [role=tablist],[role=tab],.tree ul,.paths,#paths-clear{border-color:#444}
 [role=tab],#paths-clear{background:#222}
 [role=tab][aria-selected=true]{background:#111;border-bottom-color:#111}
-.tree .sel{background:#2a2a2a}button:focus-visible{outline-color:#8ab8f0!important}}
+.tree .sel{background:#2a2a2a}
+button:focus-visible,a:focus-visible{outline-color:#8ab8f0!important}}
 """
 
 # Tabs and path outlining for the HTML report.  Inline so the page stays a
@@ -1183,13 +1185,14 @@ _TREE_JS = """
 
   // Select a package: outline every occurrence and its ancestors in the
   // main tree, then mirror just those paths in the panel.  Selecting the
-  // current package again clears both.
-  function select(name) {
+  // current package again clears both, unless ``force`` is set (a link from
+  // the report always means "show me this one").
+  function select(name, force) {
     [].forEach.call(tree.querySelectorAll('.sel, .onpath'), function (b) {
       b.classList.remove('sel', 'onpath');
       b.setAttribute('aria-pressed', 'false');
     });
-    current = current === name ? null : name;
+    current = current === name && !force ? null : name;
     var label = '', count = 0;
     [].forEach.call(tree.querySelectorAll('button[data-name]'), function (b) {
       if (current === null || b.dataset.name !== current) return;
@@ -1222,9 +1225,33 @@ _TREE_JS = """
     select(name);
     // Clear hides itself; put focus on the package in the tree instead of
     // dropping it on the page.
-    [].filter.call(tree.querySelectorAll('button[data-name]'), function (b) {
+    first(name).focus();
+  });
+
+  function first(name) {
+    return [].filter.call(tree.querySelectorAll('button[data-name]'), function (b) {
       return b.dataset.name === name;
-    })[0].focus();
+    })[0];
+  }
+
+  // Package links in the report tab: switch to the tree with the package
+  // selected and its first occurrence scrolled into view and focused.
+  // Modified clicks (new tab/window) keep the browser's own behaviour.
+  document.getElementById('tab-report').addEventListener('click', function (ev) {
+    var link = ev.target.closest('a.pkg');
+    if (!link || ev.button !== 0 || ev.ctrlKey || ev.metaKey || ev.shiftKey || ev.altKey) {
+      return;
+    }
+    ev.preventDefault();
+    var tab = document.getElementById('tabbtn-tree');
+    show(tab);
+    remember(tab);
+    select(link.dataset.name, true);
+    var target = first(link.dataset.name);
+    if (target) {
+      target.scrollIntoView({block: 'center'});
+      target.focus({preventScroll: true});
+    }
   });
 })();
 """
@@ -1313,9 +1340,15 @@ def render_html(report: Report) -> str:
     newest = {u.ref: u for u in report.updates}
     rows = []
     for dep in sorted(report.deps.values(), key=_dep_key):
-        # A version picked from a range says so in the package cell's tooltip.
+        # The package links to its node in the tree tab (_TREE_JS selects it
+        # there; without scripts it is a plain jump to the tree section).  A
+        # version picked from a range says so in the link's tooltip.
         rng = report.ranges.get(dep.ref)
-        package = '<span title="from %s">%s</span>' % (e(rng), e(dep.ref)) if rng else e(dep.ref)
+        package = '<a href="#tab-tree" data-name="%s" class="pkg"%s>%s</a>' % (
+            e(dep.name),
+            ' title="from %s"' % e(rng) if rng else "",
+            e(dep.ref),
+        )
         row = [package, e(_via(dep, " \u2192 ")).replace("\n", "<br>"), e(dep.context)]
         if report.checked_updates:
             u = newest.get(dep.ref)

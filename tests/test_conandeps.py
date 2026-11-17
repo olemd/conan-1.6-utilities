@@ -55,7 +55,10 @@ def test_sorted_by_path(report):
     assert conandeps._via(report.deps["libqux#host"]) == "-"
     page = conandeps.render_html(report)
     assert "<th>via</th>" in page
-    assert "<td>libdeep/1.0</td><td>libfoo \u2192 libbar</td><td>host</td>" in page
+    assert (
+        '<td><a href="#tab-tree" data-name="libdeep" class="pkg">libdeep/1.0</a></td>'
+        "<td>libfoo \u2192 libbar</td><td>host</td>" in page
+    )
 
 
 def test_via_lists_every_parent_path():
@@ -121,7 +124,7 @@ def test_dependency_rows_sort_by_via_then_name():
     }
     expected = ["zdirect", "beta", "deep", "alpha"]
     page = conandeps.render_html(_mini_report(deps))
-    assert re.findall(r"<td>(\w+)/1\.0</td>", page.split("<h2>Overrides")[0]) == expected
+    assert re.findall(r'class="pkg">(\w+)/1\.0</a>', page.split("<h2>Overrides")[0]) == expected
 
 
 def test_overrides_and_missing_binaries_sorted():
@@ -183,13 +186,18 @@ def test_newest_tooltip_carries_the_export_dates():
 
 
 def test_version_range_is_the_package_tooltip():
+    """The package cell links to the tree; a version range is its tooltip."""
     deps = {
         "a#host": _mini_dep("a/1.2", direct=True),
         "b#host": _mini_dep("b/1.0", direct=True),
     }
     page = conandeps.render_html(_mini_report(deps, ranges={"a/1.2": "a/[>=1.0 <2]"}))
-    assert '<td><span title="from a/[&gt;=1.0 &lt;2]">a/1.2</span></td>' in page
-    assert "<td>b/1.0</td>" in page  # no range, no tooltip
+    assert (
+        '<td><a href="#tab-tree" data-name="a" class="pkg" '
+        'title="from a/[&gt;=1.0 &lt;2]">a/1.2</a></td>' in page
+    )
+    # no range, no tooltip
+    assert '<td><a href="#tab-tree" data-name="b" class="pkg">b/1.0</a></td>' in page
 
 
 def test_dependency_table_shows_newest_version():
@@ -292,7 +300,7 @@ def test_newer_versions(report):
     assert u.current_time and u.latest_time and u.latest_time >= u.current_time
     page = conandeps.render_html(report)
     assert re.search(
-        r'<td>libbar/1\.1</td>.*?<span class="new" title="newer version; '
+        r'>libbar/1\.1</a></td>.*?<span class="new" title="newer version; '
         r'exported \d{4}-\d{2}-\d{2}, newest exported \d{4}-\d{2}-\d{2}">1\.2</span>',
         page,
     )
@@ -496,6 +504,11 @@ def test_html_render(report):
     tree_tab = page.split('<section id="tab-tree"')[1].split("</section>")[0]
     assert report_tab.count("<table>") == 3 and "<table>" not in tree_tab
     assert '<ul class="tree" id="tree">' in tree_tab
+    # Every package in the dependency table links to a node of the tree.
+    linked = re.findall(r'<a href="#tab-tree" data-name="([^"]+)" class="pkg"', report_tab)
+    assert len(linked) == len(report.deps)
+    in_tree = set(re.findall(r'<button type="button" data-name="([^"]+)"', tree_tab))
+    assert set(linked) <= in_tree
     # The paths panel the script fills; hidden without scripts, and before
     # the tree in the page so a stacked layout reads panel-then-tree.
     panel = re.search(
@@ -506,7 +519,8 @@ def test_html_render(report):
     )
     assert panel
     # Self-contained: the script is inline and nothing is fetched.
-    assert "<script>" in page and " src=" not in page and " href=" not in page
+    assert "<script>" in page and " src=" not in page
+    assert not re.search(r' href="(?!#)', page)  # only in-page links
 
     # The fixture's consumer is named, so the root is the package, not the
     # path; nesting follows the graph.

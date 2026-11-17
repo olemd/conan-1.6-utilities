@@ -202,7 +202,8 @@ by several others gets one line per parent (boost above is pulled in by both
 MyDepA and Zigma), shortest path first. Rows are sorted on the via column and
 then the package name, direct dependencies first, so a branch's transitive
 dependencies stay together. Hover a package that was resolved from a version
-range to see the range it was declared with.
+range to see the range it was declared with, and click a package to jump to it
+in the dependency tree, selected, with its paths in the side panel.
 
 The `context` column is Conan's host/build split. `host` means the package is
 part of what you are building: it is compiled for your target platform and

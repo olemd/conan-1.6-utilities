@@ -104,6 +104,11 @@ pip works too (plain PEP 517, documented in the README). pip upgrades need
   ancestors. Clicks in the panel select too. It is first in the DOM (the
   grid puts it on the right) so the stacked narrow layout keeps visual and
   focus order the same, and it starts `hidden` like the tab bar.
+  The dependency table's package cells are links (`a.pkg`, `data-name` =
+  the tree's key) into the tree: they switch tabs and call
+  `select(name, true)` – forced, never toggled off – then scroll to and
+  focus the first occurrence. Modified clicks are left to the browser, and
+  without scripts `href="#tab-tree"` is a plain jump.
 - **Only the remote counts, and the source is always shown.** Conan says
   `Cache` for a locally cached binary without asking the remote, so
   `_RemoteIndex` verifies cache hits with `search_packages` on the remote.
