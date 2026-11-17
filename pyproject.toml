@@ -1,6 +1,6 @@
 [project]
 name = "conan-utils"
-version = "0.6.0"
+version = "0.6.1"
 description = "Small utilities for Conan 1.x (targets 1.66)"
 readme = "README.md"
 license = "MIT"
