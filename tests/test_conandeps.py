@@ -496,6 +496,15 @@ def test_html_render(report):
     tree_tab = page.split('<section id="tab-tree"')[1].split("</section>")[0]
     assert report_tab.count("<table>") == 3 and "<table>" not in tree_tab
     assert '<ul class="tree" id="tree">' in tree_tab
+    # The paths panel the script fills; hidden without scripts, and before
+    # the tree in the page so a stacked layout reads panel-then-tree.
+    panel = re.search(
+        r'<div class="treeview"><aside class="paths" aria-labelledby="paths-title" hidden>'
+        r'<h3 id="paths-title" aria-live="polite">Paths</h3>.*?<div id="paths-tree"></div>'
+        r'.*?</aside><ul class="tree" id="tree">',
+        tree_tab,
+    )
+    assert panel
     # Self-contained: the script is inline and nothing is fetched.
     assert "<script>" in page and " src=" not in page and " href=" not in page
 

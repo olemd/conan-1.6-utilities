@@ -1079,12 +1079,24 @@ padding:.4rem .9rem;cursor:pointer;margin-bottom:-1px}
 cursor:pointer;text-align:left}
 .tree .onpath,.tree .sel{outline:2px solid currentColor;outline-offset:1px}
 .tree .sel{font-weight:700;background:#f0f0f0}
+.treeview.split{display:grid;grid-template-columns:minmax(0,1fr) minmax(16rem,32rem);gap:2rem;
+align-items:start}.treeview.split>.paths{grid-column:2;grid-row:1}
+.treeview.split>.tree{grid-column:1;grid-row:1}
+.paths{position:sticky;top:1rem;max-height:calc(100vh - 2rem);overflow:auto;
+box-sizing:border-box;border:1px solid #bbb;padding:.75rem}
+.paths h3{margin:0 0 .5rem;font-size:1em;overflow-wrap:anywhere}
+.paths .tree .onpath,.paths .tree .sel{outline:none}.paths .tree .sel{background:none}
+#paths-clear{font:inherit;color:inherit;background:#eee;border:1px solid #bbb;
+margin-top:.75rem;padding:.2rem .8rem;cursor:pointer}
+@media (max-width:60em){.treeview.split{display:block}
+.paths{position:static;max-height:none;margin-bottom:1rem}}
 button:focus-visible{outline:3px solid #1b4e8a!important;outline-offset:2px}
 @media (prefers-color-scheme:dark){body{background:#111;color:#eee}th{background:#222}
 th,td{border-color:#444}pre{background:#1c1c1c}.ok{color:#6fd66f}.missing{color:#ff7b7b}
 .cacheonly{color:#ffc857}.new{color:#ffc857}.explicit{color:#8ab8f0}
 .na,.old,.implicit,.note{color:#999}
-[role=tablist],[role=tab],.tree ul{border-color:#444}[role=tab]{background:#222}
+[role=tablist],[role=tab],.tree ul,.paths,#paths-clear{border-color:#444}
+[role=tab],#paths-clear{background:#222}
 [role=tab][aria-selected=true]{background:#111;border-bottom-color:#111}
 .tree .sel{background:#2a2a2a}button:focus-visible{outline-color:#8ab8f0!important}}
 """
@@ -1131,19 +1143,48 @@ _TREE_JS = """
   show(start || tabs[0]);
 
   var tree = document.getElementById('tree');
+  var panel = document.getElementById('paths-tree');
+  var title = document.getElementById('paths-title');
+  var empty = document.getElementById('paths-empty');
+  var clear = document.getElementById('paths-clear');
   var current = null;
-  tree.addEventListener('click', function (ev) {
-    var button = ev.target.closest('button[data-name]');
-    if (!button) return;
+  // Without scripts the panel could never fill, so it starts hidden and the
+  // tree only becomes two columns here.
+  panel.parentElement.hidden = false;
+  tree.parentElement.classList.add('split');
+
+  // The side panel: a clone of the tree pruned to the selected package's
+  // paths.  Every li without a selected button inside it is neither the
+  // package nor one of its ancestors, so it goes; shared ancestors stay
+  // merged because the clone keeps the tree's own structure.
+  function showPaths(label, count) {
+    panel.textContent = '';
+    clear.hidden = count === 0;
+    empty.hidden = count !== 0;
+    if (!count) { title.textContent = 'Paths'; return; }
+    var copy = tree.cloneNode(true);
+    copy.removeAttribute('id');
+    [].forEach.call(copy.querySelectorAll('li'), function (li) {
+      if (!li.querySelector('.sel')) li.remove();
+    });
+    panel.appendChild(copy);
+    title.textContent = count + (count === 1 ? ' path' : ' paths') + ' to ' + label;
+  }
+
+  // Select a package: outline every occurrence and its ancestors in the
+  // main tree, then mirror just those paths in the panel.  Selecting the
+  // current package again clears both.
+  function select(name) {
     [].forEach.call(tree.querySelectorAll('.sel, .onpath'), function (b) {
       b.classList.remove('sel', 'onpath');
       b.setAttribute('aria-pressed', 'false');
     });
-    var name = button.dataset.name;
-    if (current === name) { current = null; return; }
-    current = name;
+    current = current === name ? null : name;
+    var label = '', count = 0;
     [].forEach.call(tree.querySelectorAll('button[data-name]'), function (b) {
-      if (b.dataset.name !== name) return;
+      if (current === null || b.dataset.name !== current) return;
+      label = b.textContent;
+      count++;
       b.classList.add('sel');
       b.setAttribute('aria-pressed', 'true');
       for (var li = b.parentElement.parentElement.closest('li'); li;
@@ -1151,6 +1192,29 @@ _TREE_JS = """
         li.querySelector(':scope > button').classList.add('onpath');
       }
     });
+    showPaths(label, count);
+  }
+
+  function onClick(ev) {
+    var button = ev.target.closest('button[data-name]');
+    if (button) select(button.dataset.name);
+    return button;
+  }
+  tree.addEventListener('click', onClick);
+  panel.addEventListener('click', function (ev) {
+    // The panel was rebuilt under the pointer; keep keyboard focus in it.
+    if (!onClick(ev)) return;
+    (panel.querySelector('.sel') || tree.querySelector('button')).focus();
+  });
+  clear.addEventListener('click', function () {
+    if (current === null) return;
+    var name = current;
+    select(name);
+    // Clear hides itself; put focus on the package in the tree instead of
+    // dropping it on the page.
+    [].filter.call(tree.querySelectorAll('button[data-name]'), function (b) {
+      return b.dataset.name === name;
+    })[0].focus();
   });
 })();
 """
@@ -1322,13 +1386,29 @@ def render_html(report: Report) -> str:
     w('<section id="tab-tree" role="tabpanel" aria-labelledby="tabbtn-tree">')
     w("<h2>Dependency hierarchy</h2>")
     w(
-        '<p class="note">Click a package to outline every path from the conanfile to it; '
-        "click it again to clear. "
+        '<p class="note">Click a package to outline every path from the conanfile to it '
+        "and to list just those paths in the panel; click it again to clear. "
         '<span class="missing">red</span> means a binary is missing, '
         '<span class="cacheonly">orange</span> that it is only in the local cache; '
         "hover a marked package for the build types.</p>"
     )
+    # Large trees do not fit on a screen, so the selected package's paths
+    # are also shown on their own in a panel that stays in view (_TREE_JS
+    # fills it with a pruned copy of the tree).
+    # The panel comes first in the page so that on a narrow screen, where
+    # the columns stack, it sits above the tree in both visual and focus
+    # order; on a wide one the grid puts it on the right.
+    w('<div class="treeview">')
+    w(
+        '<aside class="paths" aria-labelledby="paths-title" hidden>'
+        '<h3 id="paths-title" aria-live="polite">Paths</h3>'
+        '<p class="note" id="paths-empty">Select a package to see only its paths here.</p>'
+        '<div id="paths-tree"></div>'
+        '<button type="button" id="paths-clear" hidden>Clear</button>'
+        "</aside>"
+    )
     w(_tree_html(_tree(report)))
+    w("</div>")
     w("</section>")
     w("<script>%s</script>" % _TREE_JS)
     w("</body></html>")

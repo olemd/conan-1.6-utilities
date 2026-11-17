@@ -95,6 +95,12 @@ pip works too (plain PEP 517, documented in the README). pip upgrades need
   types as tooltip. Add nothing else to it. Progressive enhancement: the tab
   bar starts `hidden`, so without scripts both panels show stacked. The JS
   is checked manually in a browser (no JS runner in the tests).
+  Real trees are taller than a screen, so the selection is also shown in a
+  sticky side panel (`aside.paths`): a clone of `#tree` with every `li` that
+  has no selected button removed – just the paths, merged where they share
+  ancestors. Clicks in the panel select too. It is first in the DOM (the
+  grid puts it on the right) so the stacked narrow layout keeps visual and
+  focus order the same, and it starts `hidden` like the tab bar.
 - **Only the remote counts, and the source is always shown.** Conan says
   `Cache` for a locally cached binary without asking the remote, so
   `_RemoteIndex` verifies cache hits with `search_packages` on the remote.
